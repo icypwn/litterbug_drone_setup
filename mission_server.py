@@ -270,10 +270,38 @@ SETTINGS = [
 
     {"key": "record", "group": "Recording", "label": "Save detection video (5 fps, with boxes)", "type": "switch",
      "default": True, "arg": "--record", "help": "The smooth 30 fps replay is always saved."},
-    {"key": "save_every", "group": "Recording", "label": "Save full photos every", "type": "optnum", "default": 2.0, "on": 2.0,
+    {"key": "save_every", "group": "Recording", "label": "Save full photos every", "type": "optnum", "default": 0.5, "on": 0.5,
      "min": 0.5, "max": 60, "step": 0.5, "unit": "s", "arg": "--save-every",
      "help": "Full-resolution photos for checking misses and training the model later. Uses about 1 MB each."},
 ]
+
+
+TILE_CACHE = os.path.join(HERE, "tiles_cache")
+
+
+def map_tile(z, x, y):
+    """Map tile from the disk cache, else from Carto (then cached). None if neither works."""
+    f = os.path.join(TILE_CACHE, z, x, y + ".png")
+    if os.path.exists(f):
+        return open(f, "rb").read()
+    kf = os.path.join(HERE, "secrets", "carto_key.txt")
+    key = open(kf).read().strip() if os.path.exists(kf) else ""
+    import urllib.request
+    base = f"https://a.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}.png"
+    data = None
+    for url in ([base + "?key=" + key] if key else []) + [base]:   # the key is refused at some zooms; plain works
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "litterbug-operator"}), timeout=6) as r:
+                data = r.read()
+            break
+        except Exception:
+            continue
+    if not data:
+        return None
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    with open(f, "wb") as out:
+        out.write(data)
+    return data
 
 
 def model_options():
@@ -621,6 +649,20 @@ def main():
                 return self.send(404, {"error": "no live view (logger not running)"})
             if self.path == "/stream":
                 return self.stream()
+            # Works with no internet on the viewing device: Leaflet comes from static/, map tiles from the
+            # Pi's cache (fetched through the Pi's own connection the first time, then kept on disk).
+            m = re.match(r"^/static/([\w.-]+(?:/[\w.-]+){0,2})$", self.path.split("?")[0])
+            if m and ".." not in m.group(1):
+                f = os.path.join(HERE, "static", m.group(1))
+                if os.path.isfile(f):
+                    ctype = {"js": "application/javascript", "css": "text/css", "png": "image/png", "svg": "image/svg+xml"}.get(f.rsplit(".", 1)[-1], "application/octet-stream")
+                    return self.send(200, open(f, "rb").read(), ctype)
+            m = re.match(r"^/tiles/(\d+)/(\d+)/(\d+)\.png$", self.path.split("?")[0])
+            if m:
+                data = map_tile(*m.groups())
+                if data:
+                    return self.send(200, data, "image/png")
+                return self.send(404, {"error": "tile not available offline"})
             if self.path == "/api/runs":
                 runs = [run_info(d) for d in sorted(glob.glob(os.path.join(a.surveys, "*", "")), reverse=True)
                         if RUN_RE.match(os.path.basename(d.rstrip("/\\")))]

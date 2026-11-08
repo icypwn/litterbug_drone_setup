@@ -817,7 +817,7 @@ def main():
     ap.add_argument("--merge-m", type=float, default=2.0,
                     help="other passes: a piece within this GPS distance of one already on the map (never seen together) is the same piece")
     ap.add_argument("--min-sightings", type=int, default=3, help="frames a piece must be followed for before it goes on the map")
-    ap.add_argument("--save-every", type=float, default=2.0, help="save a full frame every N seconds (0 = off)")
+    ap.add_argument("--save-every", type=float, default=0.5, help="save a full frame every N seconds (0 = off)")
     ap.add_argument("--record", action="store_true", help="save video.mp4 with the boxes drawn, for checking tests")
     ap.add_argument("--record-fps", type=float, default=5.0, help="playback speed of the video (match the detection rate)")
     ap.add_argument("--live", default="", help="keep the newest annotated frame as a small JPEG at this path (for the app's live view)")
@@ -848,8 +848,15 @@ def main():
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
 
-    model = YOLO(a.model, task="detect")
-    model(np.zeros((DETECT[1], DETECT[0], 3), np.uint8), imgsz=a.imgsz, verbose=False)   # warm-up
+    # Recording must never depend on YOLO: if the model won't load, keep filming and saving frames
+    # (detect afterwards with --replay / post-processing).
+    try:
+        model = YOLO(a.model, task="detect")
+        model(np.zeros((DETECT[1], DETECT[0], 3), np.uint8), imgsz=a.imgsz, verbose=False)   # warm-up
+    except Exception as e:
+        log.error("YOLO failed to load (%s): recording video and frames WITHOUT detection", e)
+        model = None
+    yolo_errors = 0
     tel, cam = Telemetry(a, log), Camera(a, log)
     tel.start(); cam.start()
     pieces = Pieces(run_dir, a.merge_m, log)
@@ -884,10 +891,17 @@ def main():
             flying = pose is not None and a.min_alt <= pose.alt <= a.max_alt
 
             small = cv2.resize(frame, DETECT, interpolation=cv2.INTER_AREA)
-            r = model(small, imgsz=a.imgsz, conf=a.conf, verbose=False)[0]
             sx, sy = W / DETECT[0], H / DETECT[1]
             dets, placed, obs = [], [], []
-            xyxy, confs = r.boxes.xyxy.tolist(), r.boxes.conf.tolist()
+            xyxy, confs = [], []
+            if model is not None:
+                try:
+                    r = model(small, imgsz=a.imgsz, conf=a.conf, verbose=False)[0]
+                    xyxy, confs = r.boxes.xyxy.tolist(), r.boxes.conf.tolist()
+                except Exception as e:   # a bad frame or a broken model: keep recording regardless
+                    yolo_errors += 1
+                    if yolo_errors in (1, 10, 100) or yolo_errors % 1000 == 0:
+                        log.error("YOLO error #%d (%s): still recording", yolo_errors, e)
             keep = drop_nested(xyxy, confs, a.nested)   # one box per piece
             for (x1, y1, x2, y2), c in zip([xyxy[i] for i in keep], [confs[i] for i in keep]):
                 X1, Y1, X2, Y2 = x1 * sx, y1 * sy, x2 * sx, y2 * sy

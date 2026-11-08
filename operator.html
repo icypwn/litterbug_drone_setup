@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>LB Operator</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="/static/leaflet/leaflet.css">
+<script src="/static/leaflet/leaflet.js"></script>
 <style>
 :root{--bg:#1c4839;--card:#245846;--ink:#3b3530;--litter:#ff5c33;--path:#4d7a94;--good:#8cd973;--caution:#ffc74d;--fg:#fff;--mute:#ffffffb3}
 *{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,Segoe UI,sans-serif}
@@ -133,7 +133,8 @@ const api = async (path, body) => {
 };
 let status = null, reachable = false, tab = 'map';
 const CARTO_KEY = '{{CARTO_KEY}}';   // filled in by mission_server.py from secrets/carto_key.txt
-const tiles = () => L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png' + (CARTO_KEY && !CARTO_KEY.startsWith('{{') ? '?key=' + CARTO_KEY : ''), {maxZoom: 21, maxNativeZoom: 19, subdomains: 'abcd'});
+// Tiles come through the Pi (cached there), so the map works even when this phone/laptop has no internet.
+const tiles = () => L.tileLayer('/tiles/{z}/{x}/{y}.png', {maxZoom: 21, maxNativeZoom: 19});
 const badge = (html, bg, size = 26) => L.divIcon({className: '', iconSize: [size, size], html: `<div class="badge" style="background:${bg};width:${size}px;height:${size}px">${html}</div>`});
 
 // ---------- tabs
@@ -148,7 +149,7 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
 });
 
 // ---------- map tab
-const map = L.map('map', {zoomControl: true}).setView([40.7402, -73.8410], 18);
+const map = L.map('map', {zoomControl: true}).setView([42.1300, -75.9022], 18);   // Otsiningo Park
 tiles().addTo(map);
 let corners = [], plan = null, centred = false;
 const cornerLayer = L.layerGroup().addTo(map), planLayer = L.layerGroup().addTo(map), pieceLayer = L.layerGroup().addTo(map);
@@ -196,7 +197,8 @@ async function makePlan() {
       L.polyline([end, h], {color: '#3b3530', weight: 2.5}).addTo(planLayer); arrowAt(end, h).addTo(planLayer);
       L.marker(h, {icon: badge('⌂', '#8cd973'), interactive: false}).addTo(planLayer);
     }
-    $('stats').textContent = ['Passes', 'Flight time', 'Area', 'Pass spacing'].map(k => `${k}: ${plan.stats[k]}`).join(' · ');
+    $('stats').innerHTML = `<b style="font-size:17px">Flight time ${esc(plan.stats['Flight time'])}</b><br>` +
+      ['Passes', 'Area', 'Pass spacing'].map(k => `${k}: ${esc(plan.stats[k])}`).join(' · ');
     say('Path ready. Upload it to the drone next.');
     $('fit').onclick();
   } catch (e) { say(e.message, true); }
@@ -376,12 +378,27 @@ const BUILTIN_AREAS = {
   'Otsiningo · Upper field 2': [[42.12985, -75.9025], [42.13018, -75.9025], [42.13018, -75.90185], [42.12985, -75.90185]],
   'Otsiningo · Lower field': [[42.12973, -75.90252], [42.12973, -75.90193], [42.1295, -75.90183], [42.1293, -75.90209], [42.12932, -75.90252]],
   'Otsiningo · Lower field 2': [[42.12926, -75.90314], [42.12926, -75.90261], [42.12901, -75.90261], [42.12902, -75.90287], [42.12902, -75.90314]],
+  'Otsiningo · Soccer field': [[42.12821, -75.9024], [42.12821, -75.90189], [42.12763, -75.90189], [42.12763, -75.9024]],
 };
 function myAreas() { try { return JSON.parse(localStorage.getItem('lbAreas') || '{}'); } catch (e) { return {}; } }
 function allAreas() { return {...BUILTIN_AREAS, ...myAreas()}; }
+// Each area's option shows how long it takes to fly at the current height / speed / overlap.
+const areaTimes = {};
 function fillAreas(pick) {
-  $('areasel').innerHTML = Object.keys(allAreas()).map(n => `<option${n === pick ? ' selected' : ''}>${esc(n)}</option>`).join('');
+  const sel = pick || $('areasel').value;
+  $('areasel').innerHTML = Object.keys(allAreas()).map(n =>
+    `<option value="${esc(n)}"${n === sel ? ' selected' : ''}>${esc(n)}${areaTimes[n] ? ' · ' + esc(areaTimes[n]) : ''}</option>`).join('');
 }
+async function timeAreas() {
+  for (const [n, area] of Object.entries(allAreas())) {
+    try {
+      const p = await api('/api/plan', {polygon: area, alt: +$('alt').value / 3.281, speed: +$('speed').value, overlap: +$('overlap').value / 100});
+      areaTimes[n] = (p.stats['Flight time'] || '').replace(/ at .*/, '') + ', ' + p.stats['Passes'] + ' passes';
+    } catch (e) { delete areaTimes[n]; }
+  }
+  fillAreas();
+}
+['alt', 'speed', 'overlap'].forEach(id => $(id).addEventListener('change', timeAreas));
 $('areause').onclick = () => {
   const name = $('areasel').value, area = allAreas()[name];
   if (!area) return;
@@ -395,9 +412,9 @@ $('areasave').onclick = () => {
   const name = (prompt('Name this area') || '').trim();
   if (!name) return;
   try { localStorage.setItem('lbAreas', JSON.stringify({...myAreas(), [name]: corners})); } catch (e) { return say("Couldn't save in this browser.", true); }
-  fillAreas(name); say('Saved ' + name);
+  fillAreas(name); say('Saved ' + name); timeAreas();
 };
-fillAreas();
+fillAreas(); timeAreas();
 const num = v => v !== '' && v !== null && typeof v !== 'boolean' && !isNaN(+v);
 const same = (a, b) => num(a) && num(b) ? +a === +b : String(a) === String(b);
 const base = p => String(p).split(/[\\/]/).pop();
