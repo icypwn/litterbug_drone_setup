@@ -35,6 +35,17 @@ button:disabled{opacity:.4;cursor:default}
 .crops{display:flex;gap:10px;overflow-x:auto}.crops img{width:96px;height:96px;object-fit:cover;border-radius:12px;border:2px solid var(--ink)}
 input[type=number]{width:70px;font:inherit;padding:6px;border-radius:8px;border:2px solid var(--ink);background:#ffffff1f;color:#fff}
 .hidden{display:none}
+.set{display:flex;gap:12px;align-items:center;padding:10px 0;border-top:1px solid #ffffff1f}
+.set .lbl{flex:1;min-width:0;font-weight:600}.set .help{font-weight:400;font-size:12px;color:var(--mute);margin-top:2px}
+.set.changed .lbl:before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--caution);margin-right:6px;vertical-align:1px}
+.set .ctl{display:flex;gap:8px;align-items:center;flex:none}.set select{max-width:290px}
+.set input[type=text]{width:100%;font:inherit;padding:8px 10px;border-radius:12px;border:2px solid var(--ink);background:#ffffff1f;color:#fff}
+.switch{position:relative;display:inline-block;width:48px;height:28px;flex:none}.switch input{opacity:0;width:0;height:0}
+.slider{position:absolute;inset:0;background:#ffffff26;border:2px solid var(--ink);border-radius:999px;cursor:pointer;transition:.15s}
+.slider:before{content:'';position:absolute;width:20px;height:20px;left:2px;top:2px;background:#fff;border-radius:50%;transition:.15s}
+.switch input:checked+.slider{background:var(--good)}.switch input:checked+.slider:before{transform:translateX(20px)}
+input:disabled{opacity:.4}
+@media (max-width:600px){.set{flex-wrap:wrap}.set .ctl{width:100%;justify-content:flex-end}}
 </style>
 </head>
 <body>
@@ -70,6 +81,7 @@ input[type=number]{width:70px;font:inherit;padding:6px;border-radius:8px;border:
       <div class="small" id="detline"></div>
       <div class="row"><button class="primary" id="camtest" style="flex:1">Start camera test</button><button id="fullscreen">Full screen</button></div>
       <div class="small" id="cammsg"></div>
+      <div class="small" id="camsettings"></div>
     </div>
   </section>
 
@@ -85,11 +97,30 @@ input[type=number]{width:70px;font:inherit;padding:6px;border-radius:8px;border:
       <div class="row"><a class="btn" id="fdownload" download>Download video</a><span class="small" id="fsize"></span></div>
       <div class="mapbox" style="height:260px;min-height:0"><div id="fmap"></div></div>
       <div class="card"><b>Litter found</b><div class="crops" id="fcrops"></div></div>
+      <div class="card"><b>Settings used</b><div class="small" id="fsettings"></div></div>
+      <div class="card"><b>Re-run tracking with other settings</b>
+        <div class="small">Uses this flight's saved detections, so you can try settings without flying again. Results show as blue pins on the map above.</div>
+        <div id="rtrows"></div>
+        <div class="row"><button class="primary" id="rtgo" style="flex:1">Re-run tracking</button><button id="rtuse">Use these for next flights</button></div>
+        <div class="small" id="rtmsg"></div>
+      </div>
     </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="tab-settings" class="hidden">
+    <div class="row"><h1 style="flex:1">Settings</h1><span id="setsaved"></span></div>
+    <div class="small" id="sethead">Changes save by themselves and apply to the next camera test or mission.</div>
+    <div class="card">
+      <div class="row"><b style="flex:1">Presets</b><span class="small">save a set of settings to switch between tests quickly</span></div>
+      <div class="row"><select id="presetsel" style="flex:1;min-width:0"></select><button id="presetload">Load</button><button id="presetdel">Delete</button></div>
+      <div class="row"><button id="presetsave">Save current as preset…</button><button id="setdefaults">Reset to defaults</button></div>
+    </div>
+    <div id="setgroups"></div>
   </section>
 </div>
 
-<nav class="tabs"><button data-tab="map" class="primary">Map</button><button data-tab="camera">Camera</button><button data-tab="flights">Flights</button></nav>
+<nav class="tabs"><button data-tab="map" class="primary">Map</button><button data-tab="camera">Camera</button><button data-tab="flights">Flights</button><button data-tab="settings">Settings</button></nav>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -108,10 +139,11 @@ const badge = (html, bg, size = 26) => L.divIcon({className: '', iconSize: [size
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   tab = b.dataset.tab;
   document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('primary', x === b));
-  ['map', 'camera', 'flights'].forEach(t => $('tab-' + t).classList.toggle('hidden', t !== tab));
+  ['map', 'camera', 'flights', 'settings'].forEach(t => $('tab-' + t).classList.toggle('hidden', t !== tab));
   if (tab === 'map') setTimeout(() => map.invalidateSize(), 50);
   $('live').src = tab === 'camera' ? '/stream?' + Date.now() : '';
   if (tab === 'flights') loadFlights();
+  if (tab === 'settings') loadSettings();
 });
 
 // ---------- map tab
@@ -206,6 +238,8 @@ async function poll() {
   if (reachable && s.battery != null) c += chip(`Battery ${s.battery}%`, s.battery > 30 ? 'ok' : s.battery > 15 ? 'warn' : 'bad');
   if (reachable && s.mode) c += chip(`${s.armed ? 'ARMED' : 'Disarmed'} · ${s.mode}`, s.armed ? 'warn' : 'mute');
   if (reachable) c += chip(s.logger ? `Detecting · ${s.pieces} found` : 'Detection off', s.logger ? 'ok' : 'mute');
+  if (reachable && s.note) c += chip(`Test: ${esc(s.note)}`, 'mute');
+  if (reachable && s.upload === false) c += chip('Uploads off', 'warn');
   $('chips').innerHTML = c;
   $('tele').textContent = s.lat != null ? `Height ${s.alt ?? '–'} m · ${s.speed ?? '–'} m/s` + (s.mission_count > 1 && s.mission_seq != null ? ` · waypoint ${s.mission_seq} of ${s.mission_count - 1}` : '') + (s.messages && s.messages.length ? ` · ${s.messages[s.messages.length - 1]}` : '') : '';
   $('plan').disabled = corners.length < 3 || !reachable;
@@ -225,6 +259,10 @@ async function poll() {
   $('camtest').textContent = det ? 'Stop camera test' : 'Start camera test';
   $('camtest').className = det ? '' : 'primary';
   $('camtest').disabled = !reachable || !!s.armed;
+  if (S) {
+    $('camsettings').innerHTML = 'Using: ' + (summarize(S.values).join(' · ') || 'all defaults') + ' · <a href="#" id="gosettings" style="color:#fff">change</a>';
+    $('gosettings').onclick = e => { e.preventDefault(); document.querySelector('[data-tab=settings]').click(); };
+  }
 }
 async function pollPieces() {
   try {
@@ -278,7 +316,8 @@ async function loadFlights() {
   const shown = $('showtests').checked ? runs : runs.filter(r => !r.test);
   $('flist').innerHTML = shown.length ? shown.map(r => `<div class="card flight" data-run="${r.run}">
       <div class="badge" style="width:38px;height:38px;background:${r.test ? '#4d7a94' : '#ff5c33'}">${r.test ? '🎥' : '✈'}</div>
-      <div style="flex:1"><b>${new Date(r.started * 1000).toLocaleString()}</b> ${r.test ? '<span class="chip mute">Test</span>' : ''} ${r.recording ? '<span class="chip warn">Recording</span>' : ''}
+      <div style="flex:1"><b>${new Date(r.started * 1000).toLocaleString()}</b> ${r.test ? '<span class="chip mute">Test</span>' : ''} ${r.recording ? '<span class="chip warn">Recording</span>' : ''} ${!r.test && !r.upload ? '<span class="chip mute">Not uploaded</span>' : ''}
+      ${r.note ? `<div>${esc(r.note)}</div>` : ''}
       <div class="small">${[fmtDur(r.seconds), `${r.pieces} litter found`, !r.video ? 'no video' : r.phone_video ? '' : 'converting video…'].filter(Boolean).join(' · ')}</div></div><span class="mute">›</span></div>`).join('')
     : `<div class="card"><b>No flights yet</b><div class="small">Each mission is saved on the drone's Pi and shows up here after landing.</div></div>`;
   document.querySelectorAll('.flight').forEach(el => el.onclick = () => openFlight(runs.find(r => r.run === el.dataset.run)));
@@ -287,7 +326,7 @@ $('showtests').onchange = loadFlights; $('refresh').onclick = loadFlights;
 $('back').onclick = () => { $('fvideo').pause(); loadFlights(); };
 async function openFlight(r) {
   $('flist').classList.add('hidden'); $('fdetail').classList.remove('hidden');
-  $('ftitle').textContent = new Date(r.started * 1000).toLocaleString();
+  $('ftitle').textContent = new Date(r.started * 1000).toLocaleString() + (r.note ? ' · ' + r.note : '');
   $('fsub').textContent = [r.test ? 'Camera test' : 'Flight', fmtDur(r.seconds), `${r.pieces} litter found`].filter(Boolean).join(' · ');
   const setMode = smooth => {
     smooth = smooth && !!r.replay;
@@ -308,10 +347,127 @@ async function openFlight(r) {
   const pts = g.features.map(f => [f.geometry.coordinates[1], f.geometry.coordinates[0]]);
   pts.forEach((p, i) => L.marker(p, {icon: badge('🗑', '#ff5c33', 24)}).addTo(fLayer));
   if (pts.length) fmap.fitBounds(pts, {padding: [30, 30], maxZoom: 19}); else fmap.setView([40.7402, -73.8410], 16);
+  showRunSettings(r);
   $('fcrops').innerHTML = g.features.map(f => f.properties.crop ? `<div><img src="/runs/${r.run}/${f.properties.crop}"><div class="small">${Math.round(f.properties.max_conf * 100)}% · seen ${f.properties.sightings}×</div></div>` : '').join('') || '<span class="small">None</span>';
 }
 
-drawCorners(); poll(); pollPieces();
+// ---------- settings tab (every option is defined in mission_server.py SETTINGS; this page just draws them)
+let S = null, saveTimer = null;
+const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const num = v => v !== '' && v !== null && typeof v !== 'boolean' && !isNaN(+v);
+const same = (a, b) => num(a) && num(b) ? +a === +b : String(a) === String(b);
+const base = p => String(p).split(/[\\/]/).pop();
+function fmtVal(s, v) {
+  if (s.type === 'switch') return v ? 'on' : 'off';
+  if (s.type === 'optnum' && +v === 0) return 'off';
+  if (s.type === 'select') { const o = s.options.find(o => same(o[0], v)); return o ? o[1] : base(v); }
+  return `${v}${s.unit ? ' ' + s.unit : ''}`;
+}
+function summarize(vals) {   // settings that differ from the defaults, as short text
+  return S ? S.schema.filter(s => s.key !== 'note' && s.key in vals && !same(vals[s.key], S.defaults[s.key]))
+    .map(s => `${esc(s.label)}: <b>${esc(fmtVal(s, vals[s.key]))}</b>`) : [];
+}
+function control(s, id, v) {
+  const numIn = (val, dis) => `<input type="number" id="${id}" min="${s.min}" max="${s.max}" step="${s.step}" value="${esc(val)}" ${dis ? 'disabled' : ''}>${s.unit ? `<span class="small">${esc(s.unit)}</span>` : ''}`;
+  const sw = (sid, on) => `<label class="switch"><input type="checkbox" id="${sid}" ${on ? 'checked' : ''}><span class="slider"></span></label>`;
+  if (s.type === 'switch') return sw(id, v);
+  if (s.type === 'number') return numIn(v, false);
+  if (s.type === 'optnum') return sw(id + '-on', +v !== 0) + numIn(+v === 0 ? s.on : v, +v === 0);
+  if (s.type === 'select') {
+    const known = s.options.some(o => same(o[0], v));
+    return `<select id="${id}">${s.options.map(o => `<option value="${esc(o[0])}" ${same(o[0], v) ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}` +
+      (known ? '' : `<option selected value="${esc(v)}">${esc(base(v))} (not found)</option>`) + '</select>';
+  }
+  return `<input type="text" id="${id}" value="${esc(v)}" placeholder="e.g. Test 2: confidence 0.25, park by the school">`;
+}
+function rowHtml(s, prefix, v) {
+  if (s.type === 'text') return `<div class="set" style="display:block"><div class="lbl">${esc(s.label)}<div class="help">${esc(s.help)}</div></div><div style="margin-top:6px">${control(s, prefix + s.key, v)}</div></div>`;
+  const changed = !same(v, S.defaults[s.key]);
+  return `<div class="set ${changed ? 'changed' : ''}"><div class="lbl">${esc(s.label)}<div class="help">${esc(s.help)}${changed ? ` Default: ${esc(fmtVal(s, S.defaults[s.key]))}.` : ''}</div></div><div class="ctl">${control(s, prefix + s.key, v)}</div></div>`;
+}
+function readControl(s, id) {   // current value of one setting's control(s)
+  if (s.type === 'switch') return $(id).checked;
+  if (s.type === 'optnum') return $(id + '-on').checked ? (+$(id).value || s.on) : 0;
+  if (s.type === 'number') return +$(id).value;
+  return $(id).value;
+}
+async function loadSettings() {
+  try { S = await api('/api/settings'); if (tab === 'settings' || !$('setgroups').innerHTML) renderSettings(); }
+  catch (e) { $('setgroups').innerHTML = `<div class="card bad">Can't reach the Pi to load settings.</div>`; }
+}
+function renderSettings() {
+  const groups = [...new Set(S.schema.map(s => s.group))];
+  $('setgroups').innerHTML = groups.map(g => `<div class="card"><b>${esc(g)}</b>${S.schema.filter(s => s.group === g).map(s => rowHtml(s, 'set-', S.values[s.key])).join('')}</div>`).join('');
+  S.schema.forEach(s => {
+    const id = 'set-' + s.key, send = () => saveSetting(s.key, readControl(s, id));
+    if (s.type === 'optnum') {
+      $(id + '-on').onchange = () => { $(id).disabled = !$(id + '-on').checked; send(); };
+      $(id).onchange = send;
+    } else if (s.type === 'text') {
+      $(id).oninput = () => { clearTimeout(saveTimer); saveTimer = setTimeout(send, 700); };
+    } else $(id).onchange = send;
+  });
+  $('presetsel').innerHTML = S.presets.length ? S.presets.map(n => `<option>${esc(n)}</option>`).join('') : '<option value="">No presets yet</option>';
+  $('presetload').disabled = $('presetdel').disabled = !S.presets.length;
+  const n = summarize(S.values).length;
+  $('sethead').textContent = 'Changes save by themselves and apply to the next camera test or mission. ' +
+    (n ? `${n} setting${n > 1 ? 's' : ''} changed from the default (yellow dot).` : 'Everything is at its default.');
+}
+async function saveSetting(key, value) {
+  try {
+    S = await api('/api/settings', {values: {[key]: value}});
+    if (key !== 'note') renderSettings();   // re-draw to show limits applied and yellow dots (not while typing a note)
+    const running = status && status.logger;
+    $('setsaved').innerHTML = chip(running ? 'Saved · applies to the next run' : 'Saved', running ? 'warn' : 'ok');
+    poll();
+  } catch (e) { $('setsaved').innerHTML = chip('Not saved: ' + esc(e.message), 'bad'); }
+}
+async function presetAct(action, name) {
+  try {
+    S = await api('/api/settings/preset', {action, name}); renderSettings(); poll();
+    $('setsaved').innerHTML = chip({save: 'Preset saved', load: 'Preset loaded', delete: 'Preset deleted', defaults: 'Defaults restored'}[action], 'ok');
+  } catch (e) { $('setsaved').innerHTML = chip(esc(e.message), 'bad'); }
+}
+$('presetload').onclick = () => presetAct('load', $('presetsel').value);
+$('presetdel').onclick = () => { const n = $('presetsel').value; if (n && confirm(`Delete preset "${n}"?`)) presetAct('delete', n); };
+$('presetsave').onclick = () => { const n = prompt('Name for this preset (e.g. "Low confidence", "Wide camera"):'); if (n) presetAct('save', n); };
+$('setdefaults').onclick = () => { if (confirm('Put every setting back to its default? (Presets and the test name are kept.)')) presetAct('defaults'); };
+
+// ---------- flight detail: what a run used, and re-running its tracking with other settings
+const RT_KEYS = ['min_sightings', 'gate_m', 'track_timeout', 'merge_m', 'nested'];
+let rtLayer = null, curRun = null;
+function showRunSettings(r) {
+  curRun = r;
+  if (rtLayer) rtLayer.clearLayers();
+  $('rtmsg').textContent = '';
+  if (!S) { $('fsettings').textContent = 'Loading…'; loadSettings().then(() => S && curRun === r && showRunSettings(r)); return; }
+  const st = r.settings || {};
+  $('fsettings').innerHTML = Object.keys(st).length ? (summarize(st).join('<br>') || 'All defaults.') : 'Not recorded for this run (flown before settings were saved).';
+  $('rtrows').innerHTML = S.schema.filter(s => RT_KEYS.includes(s.key)).map(s => rowHtml(s, 'rt-', st[s.key] ?? S.defaults[s.key])).join('');
+  S.schema.filter(s => s.type === 'optnum' && RT_KEYS.includes(s.key))
+    .forEach(s => $('rt-' + s.key + '-on').onchange = () => { $('rt-' + s.key).disabled = !$('rt-' + s.key + '-on').checked; });
+}
+const rtValues = () => Object.fromEntries(S.schema.filter(s => RT_KEYS.includes(s.key)).map(s => [s.key, readControl(s, 'rt-' + s.key)]));
+$('rtgo').onclick = async () => {
+  $('rtmsg').textContent = 'Working…';
+  try {
+    const res = await api(`/api/runs/${curRun.run}/retrack`, rtValues());
+    if (!rtLayer) rtLayer = L.layerGroup().addTo(fmap);
+    rtLayer.clearLayers();
+    res.pieces.forEach(f => L.circleMarker([f.geometry.coordinates[1], f.geometry.coordinates[0]], {radius: 7, color: '#fff', weight: 2, fillColor: '#2f80ff', fillOpacity: 1})
+      .bindTooltip(`seen ${f.properties.sightings}× · ${Math.round(f.properties.max_conf * 100)}%`).addTo(rtLayer));
+    $('rtmsg').innerHTML = `<b>${res.new} pieces</b> with these settings (the flight itself found ${curRun.pieces}; the old GPS-only method would give ${res.old}). ` +
+      `${res.tracks} tracks, ${res.too_short} too short to count, ${res.resighted} joined across passes.`;
+  } catch (e) { $('rtmsg').textContent = e.message; }
+};
+$('rtuse').onclick = async () => {
+  try { S = await api('/api/settings', {values: rtValues()}); $('rtmsg').textContent = 'Saved: the next flights use these tracking settings.'; poll(); }
+  catch (e) { $('rtmsg').textContent = e.message; }
+};
+
+drawCorners(); poll(); pollPieces(); loadSettings();
+const startTab = document.querySelector(`.tabs [data-tab="${location.hash.slice(1)}"]`);   // e.g. http://litterbug.local:8080/#settings
+if (startTab) startTab.click();
 setInterval(poll, 1000); setInterval(pollPieces, 2000);
 </script>
 </body>

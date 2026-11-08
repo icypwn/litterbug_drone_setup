@@ -98,12 +98,13 @@ def convert_one(run_dir, name):
 def sync_run(db, run_dir, source="drone", live=False):
     from firebase_admin import firestore
     from google.cloud.firestore_v1.base_query import FieldFilter
-    run = os.path.basename(run_dir.rstrip("/"))
+    run = os.path.basename(run_dir.rstrip("/\\"))
     dbp = os.path.join(run_dir, "survey.db")
     if not os.path.exists(dbp):
         return 0
-    try:   # camera tests on the ground use a fake position: never publish those as litter
-        if json.load(open(os.path.join(run_dir, "settings.json"))).get("sim"):
+    try:   # camera tests (fake position) and runs flown with uploads off are never published
+        st = json.load(open(os.path.join(run_dir, "settings.json")))
+        if st.get("sim") or st.get("no_upload"):
             return 0
     except (OSError, ValueError):
         pass
@@ -161,12 +162,12 @@ def sync_all(surveys, skip=None, source="drone"):
     db = client()
     n = 0
     for run_dir in sorted(glob.glob(os.path.join(surveys, "*", ""))):
-        if skip and os.path.abspath(run_dir.rstrip("/")) == os.path.abspath(skip.rstrip("/")):
+        if skip and os.path.abspath(run_dir.rstrip("/\\")) == os.path.abspath(skip.rstrip("/\\")):
             continue
         try:
             n += sync_run(db, run_dir, source)
         except Exception as e:
-            log.warning("%s: %s (will retry)", os.path.basename(run_dir.rstrip("/")), e)
+            log.warning("%s: %s (will retry)", os.path.basename(run_dir.rstrip("/\\")), e)
             break   # most likely offline; try again next pass
     return n
 

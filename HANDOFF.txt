@@ -33,7 +33,7 @@ MODELS  (~/litter-model/)
 
 CODE  (~/litterbug/, copy to Pi ~/litterbug/, run with ~/yolo/venv)
 - survey_logger.py   camera(30fps, lores 640x360 live stream) -> YOLO on newest full frame -> pose (MAVLink or --sim)
-                     -> geolocate -> merge sightings within 3 m -> SQLite survey.db (WAL; fb_status/fb_id columns),
+                     -> geolocate -> track each piece frame to frame (velocity) -> SQLite survey.db (WAL; fb_status/fb_id columns),
                      crops, frames, video.mp4 (--record), live JPEG (--live). --selftest checks map math.
 - mission_server.py  HTTP API :8080 + operator.html. Plan (/api/plan), upload/start/pause/rtl/land via pymavlink,
                      runs logger, stops it on disarm, /stream (MJPEG live), /api/pieces (from DB, with status),
@@ -69,9 +69,14 @@ TODO / OPEN
    Measure YOLO fps with 30fps camera (expected ~4.5-4.8) and live view fps; check lores YUV420 stream works on Pi 5.
 2. Run mission_server on Pi; test app against it (Camera test, Flights).
 3. Test MAVLink mission flow against ArduPilot SITL before any real flight; wire Pi<->Solo serial.
-4. Pending user decisions: per-item tracking vs 3 m merge (user wants separate items; also wanted label+item per
+4. Per-item tracking DONE in survey_logger.py (2026-11-07; see TODO_tracking.md), tested in simulation only.
+   Pending user decisions: label+item per
    location, label maybe via vision AI after landing); Blaze for video storage; regular CM3 camera; consumer app Firebase.
 5. Mac disk was low (~6 GB free; CoreSimulator uses 20 GB). Scratch files live in the session scratchpad (temporary).
+
+SETTINGS TAB (2026-11-08): operator.html has a Settings tab (all logger options, presets, test name, upload on/off
+  per run, saved in field_settings.json on the Pi) and Flights -> Re-run tracking. iOS app NOT updated: use the web page
+  for field tests. See FIELD_TESTS.md. Pi also needs `pip install scipy` (no longer installed by ultralytics).
 
 WEB OPERATOR (for non-Mac users)
 - operator.html is now a full web version of LB Operator (Map / Camera / Flights tabs, same look; Leaflet map).

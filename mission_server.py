@@ -212,11 +212,175 @@ class Drone(threading.Thread):
             self.command(mu.MAV_CMD_MISSION_START, 0, 0)
 
 
+# ---------------------------------------------------------------- field-test settings (Settings tab on the operator page)
+# Every survey_logger option the page can change. type: switch | number | optnum (switch + number; off = 0) | select | text.
+# "arg" is the survey_logger flag. Saved in field_settings.json next to this file; used for every run started.
+DEFAULT_MODEL = os.path.expanduser("~/yolo/all1280_rect_ncnn_model")
+SETTINGS = [
+    {"key": "note", "group": "This test", "label": "Test name / notes", "type": "text", "default": "", "arg": "--note",
+     "help": "Saved with each run and shown under Flights, so you know what every test was."},
+    {"key": "upload", "group": "This test", "label": "Upload litter to Firebase after landing", "type": "switch", "default": True,
+     "help": "Off for practice and settings tests: those runs are never published, even if you turn this back on later."},
+
+    {"key": "model", "group": "Detection", "label": "Model", "type": "select", "default": DEFAULT_MODEL, "arg": "--model",
+     "help": "Which trained YOLO model runs. NCNN models are the fast ones on the Pi (~5 fps); .pt models are much slower there."},
+    {"key": "conf", "group": "Detection", "label": "Confidence threshold", "type": "number", "default": 0.35,
+     "min": 0.05, "max": 0.95, "step": 0.05, "arg": "--conf",
+     "help": "Boxes less sure than this are ignored. Lower finds more litter but gives more false alarms."},
+    {"key": "nested", "group": "Detection", "label": "Drop double boxes", "type": "optnum", "default": 0.0, "on": 0.85,
+     "min": 0.3, "max": 1.0, "step": 0.05, "arg": "--nested",
+     "help": "When one box sits mostly inside another (a bottle and its cap), keep only the surer one. "
+             "The number is how far inside (0.85 = 85%). Fewer duplicates, but can merge pieces lying on top of each other."},
+
+    {"key": "camera", "group": "Camera", "label": "Camera", "type": "select", "default": "cm3", "arg": "--camera",
+     "options": [["cm3", "Camera Module 3 (regular)"], ["cm3wide", "Camera Module 3 Wide"]],
+     "help": "Must match the camera on the drone. Sets the map maths and the spacing between passes."},
+    {"key": "mount_yaw", "group": "Camera", "label": "Top of the image points to the drone's", "type": "select", "default": "0",
+     "arg": "--mount-yaw", "options": [["0", "nose (normal)"], ["90", "right side"], ["180", "tail"], ["270", "left side"]],
+     "help": "Check with a camera test: walk forward holding the drone; the ground should move down the picture. Wrong = tracking breaks."},
+    {"key": "shutter_us", "group": "Camera", "label": "Fast shutter", "type": "optnum", "default": 1000, "on": 1000,
+     "min": 100, "max": 20000, "step": 100, "unit": "µs", "int": True, "arg": "--shutter-us",
+     "help": "A short exposure stops motion blur (1000 µs = 1/1000 s). Off = the camera picks (blurrier when moving, better in dim light)."},
+    {"key": "focus_m", "group": "Camera", "label": "Lock focus", "type": "optnum", "default": 4.6, "on": 4.6,
+     "min": 0.5, "max": 30, "step": 0.1, "unit": "m", "arg": "--focus-m",
+     "help": "Fixes focus at this distance: set it to the flying height. Off = autofocus, which can hunt mid-flight."},
+    {"key": "camfps", "group": "Camera", "label": "Camera frame rate", "type": "select", "default": "30", "arg": "--camfps",
+     "options": [["30", "30 fps (smooth live view)"], ["15", "15 fps (less load on the Pi)"]],
+     "help": "Only affects the live view and replay; YOLO runs at ~5 fps either way."},
+
+    {"key": "min_sightings", "group": "Tracking", "label": "Frames before a piece goes on the map", "type": "number",
+     "default": 3, "min": 1, "max": 10, "step": 1, "int": True, "arg": "--min-sightings",
+     "help": "Higher = fewer false alarms on the map, but small or briefly seen litter may be missed."},
+    {"key": "gate_m", "group": "Tracking", "label": "Frame-to-frame match distance", "type": "number", "default": 0.5,
+     "min": 0.1, "max": 3, "step": 0.1, "unit": "m", "arg": "--gate-m",
+     "help": "How far from its predicted spot a box can be and still count as the same piece. "
+             "Raise if one piece keeps getting new ids; lower if neighbouring pieces swap."},
+    {"key": "track_timeout", "group": "Tracking", "label": "Forget a piece after", "type": "number", "default": 1.5,
+     "min": 0.3, "max": 5, "step": 0.1, "unit": "s unseen", "arg": "--track-timeout",
+     "help": "How long a piece can go undetected (missed frames) before it's treated as gone."},
+    {"key": "merge_m", "group": "Tracking", "label": "Same piece on another pass if within", "type": "number", "default": 2.0,
+     "min": 0, "max": 6, "step": 0.5, "unit": "m", "arg": "--merge-m",
+     "help": "For pieces seen again on the next pass. Higher = fewer duplicates but close pieces may merge. 0 = never join passes."},
+
+    {"key": "min_alt", "group": "Flight", "label": "Ignore detections below", "type": "number", "default": 2.0,
+     "min": 0, "max": 30, "step": 0.5, "unit": "m", "arg": "--min-alt",
+     "help": "Skips takeoff and landing, when the camera sees the launch spot up close."},
+    {"key": "max_alt", "group": "Flight", "label": "Ignore detections above", "type": "number", "default": 30.0,
+     "min": 1, "max": 120, "step": 1, "unit": "m", "arg": "--max-alt", "help": ""},
+
+    {"key": "record", "group": "Recording", "label": "Save detection video (5 fps, with boxes)", "type": "switch",
+     "default": True, "arg": "--record", "help": "The smooth 30 fps replay is always saved."},
+    {"key": "save_every", "group": "Recording", "label": "Save full photos every", "type": "optnum", "default": 2.0, "on": 2.0,
+     "min": 0.5, "max": 60, "step": 0.5, "unit": "s", "arg": "--save-every",
+     "help": "Full-resolution photos for checking misses and training the model later. Uses about 1 MB each."},
+]
+
+
+def model_options():
+    found = sorted(set(glob.glob(os.path.expanduser("~/yolo/*_ncnn_model")) + glob.glob(os.path.expanduser("~/yolo/*.pt"))
+                       + glob.glob(os.path.join(HERE, "models", "*.pt"))))
+    return [[p, os.path.basename(p) + ("  (fast on the Pi)" if p.endswith("_ncnn_model") else "")] for p in found]
+
+
+def options(s):
+    return model_options() if s["key"] == "model" else s.get("options", [])
+
+
+class Settings:
+    """Current settings plus named presets, kept in field_settings.json."""
+
+    def __init__(self, path, camera):
+        self.path, self.lock = path, threading.Lock()
+        for s in SETTINGS:
+            if s["key"] == "camera":
+                s["default"] = camera
+        try:
+            d = json.load(open(path))
+        except (OSError, ValueError):
+            d = {}
+        self.current, self.presets = self.clean(d.get("current", {})), d.get("presets", {})
+
+    @staticmethod
+    def defaults():
+        return {s["key"]: s["default"] for s in SETTINGS}
+
+    @staticmethod
+    def clean(v):
+        """Fills gaps with defaults and keeps every value inside its limits."""
+        out = {}
+        for s in SETTINGS:
+            x, t = v.get(s["key"], s["default"]), s["type"]
+            try:
+                if t == "switch":
+                    x = bool(x)
+                elif t in ("number", "optnum"):
+                    x = float(x)
+                    if not (t == "optnum" and x == 0):
+                        x = min(max(x, s["min"]), s["max"])
+                    if s.get("int"):
+                        x = int(round(x))
+                elif t == "select":
+                    x = str(x)
+                    if x not in [o[0] for o in options(s)] and not (s["key"] == "model" and x == s["default"]):
+                        x = s["default"]
+                else:
+                    x = " ".join(str(x).split())[:200]
+            except (TypeError, ValueError):
+                x = s["default"]
+            out[s["key"]] = x
+        return out
+
+    def save(self):
+        tmp = self.path + ".tmp"
+        json.dump({"current": self.current, "presets": self.presets}, open(tmp, "w"), indent=1)
+        os.replace(tmp, self.path)
+
+    def update(self, values):
+        with self.lock:
+            self.current = self.clean({**self.current, **values})
+            self.save()
+
+    def preset(self, action, name):
+        name = " ".join(str(name or "").split())[:40]
+        with self.lock:
+            if action == "save" and name:
+                self.presets[name] = dict(self.current)
+            elif action == "load" and name in self.presets:
+                self.current = self.clean(self.presets[name])
+            elif action == "delete":
+                self.presets.pop(name, None)
+            elif action == "defaults":
+                self.current = self.clean({"note": self.current.get("note", "")})
+            else:
+                raise RuntimeError("unknown preset action or name")
+            self.save()
+
+    def logger_args(self):
+        args = []
+        for s in SETTINGS:
+            x = self.current[s["key"]]
+            if "arg" not in s:
+                continue
+            if s["type"] == "switch":
+                args += [s["arg"]] if x else []
+            elif s["type"] == "text":
+                args += [s["arg"], x] if x else []
+            else:
+                args += [s["arg"], str(x)]   # optnum 0 is the logger's own "off"
+        if not self.current["upload"]:
+            args.append("--no-upload")
+        return args
+
+    def page(self):
+        schema = [{**s, "options": options(s)} if s["type"] == "select" else s for s in SETTINGS]
+        return {"schema": schema, "values": self.current, "defaults": self.defaults(), "presets": sorted(self.presets)}
+
+
 class Logger:
     """Runs survey_logger.py as a separate process, fed by the forwarded MAVLink stream (or a fake position)."""
 
     def __init__(self, extra):
-        self.p, self.extra, self.started = None, extra, None
+        self.p, self.extra, self.started = None, extra, None   # extra: function returning the logger's options
 
     def running(self):
         return self.p is not None and self.p.poll() is None
@@ -225,10 +389,10 @@ class Logger:
         if self.running():
             return
         src = ["--sim", sim] if sim else ["--mavlink", "udpin:" + FWD]
-        cmd = [sys.executable, os.path.join(HERE, "survey_logger.py"), *src, "--record", "--live", LIVE, *self.extra]
+        cmd = [sys.executable, os.path.join(HERE, "survey_logger.py"), *src, "--live", LIVE, *self.extra()]
         self.p = subprocess.Popen(cmd, stdout=open(os.path.join(HERE, "logger_console.txt"), "a"), stderr=subprocess.STDOUT)
         self.started = time.time()
-        log.info("Logger started (%s)", "sim" if sim else "flight")
+        log.info("Logger started (%s): %s", "sim" if sim else "flight", " ".join(cmd[2:]))
 
     def stop(self):
         if self.running():
@@ -245,12 +409,15 @@ RUN_RE = re.compile(r"^\d{8}_\d{6}$")
 
 def run_info(run_dir):
     """Summary of one run folder for the Flights list."""
-    name = os.path.basename(run_dir.rstrip("/"))
+    name = os.path.basename(run_dir.rstrip("/\\"))
     info = {"run": name, "started": time.mktime(time.strptime(name, "%Y%m%d_%H%M%S")), "pieces": 0,
             "test": False, "video": None, "video_bytes": 0, "phone_video": False, "seconds": None,
-            "replay": None, "replay_bytes": 0, "phone_replay": False}
-    try:
-        info["test"] = bool(json.load(open(os.path.join(run_dir, "settings.json"))).get("sim"))
+            "replay": None, "replay_bytes": 0, "phone_replay": False, "note": "", "settings": {}, "upload": True}
+    try:   # what the logger ran with (survey_logger writes its options to settings.json)
+        st = json.load(open(os.path.join(run_dir, "settings.json")))
+        info.update(test=bool(st.get("sim")), note=st.get("note", ""), upload=not st.get("no_upload"),
+                    settings={k: st[k] for k in [x["key"] for x in SETTINGS] if k in st})
+        info["settings"]["upload"] = info["upload"]
     except (OSError, ValueError):
         pass
     try:
@@ -285,8 +452,9 @@ def run_pieces(run_dir, firebase_on):
     dbp = os.path.join(run_dir, "survey.db")
     if not os.path.exists(dbp):
         return []
-    try:
-        test = bool(json.load(open(os.path.join(run_dir, "settings.json"))).get("sim"))
+    try:   # camera tests and runs flown with uploads off never go to Firebase
+        st = json.load(open(os.path.join(run_dir, "settings.json")))
+        test = bool(st.get("sim") or st.get("no_upload"))
     except (OSError, ValueError):
         test = False
     con = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True, timeout=5)
@@ -305,6 +473,27 @@ def run_pieces(run_dir, firebase_on):
     return feats
 
 
+def retrack_run(run_dir, body):
+    """Re-runs piece tracking on a finished run's saved detections with other tracking settings (no flying needed).
+    Writes <run>/retrack/ and returns the new pieces plus how the old GPS-only method would have done."""
+    import survey_logger as sl
+    path = os.path.join(run_dir, "detections.jsonl")
+    if not os.path.exists(path):
+        raise RuntimeError("this run has no saved detections")
+    st = json.load(open(os.path.join(run_dir, "settings.json")))
+    v = Settings.clean({**st, **{k: body[k] for k in ("min_sightings", "gate_m", "track_timeout", "merge_m", "nested") if k in body}})
+    frames = [json.loads(line) for line in open(path) if line.strip()]
+    quiet = logging.getLogger("retrack")
+    quiet.setLevel(logging.WARNING)
+    args = (st.get("camera", "cm3"), st.get("mount_yaw", 0.0), st.get("min_alt", 2.0), st.get("max_alt", 30.0))
+    tr = sl.retrack(frames, os.path.join(run_dir, "retrack"), *args, v["merge_m"], v["min_sightings"], v["gate_m"],
+                    v["track_timeout"], v["nested"], log=quiet)
+    old = sl.gps_merge(frames, *args, 3.0, v["min_sightings"])
+    g = json.load(open(os.path.join(run_dir, "retrack", "pieces.geojson")))
+    return {"pieces": g["features"], "new": len(tr.pieces.items), "old": len(old), "tracks": tr.n_tracks,
+            "too_short": tr.n_dropped, "resighted": tr.pieces.n_resighted, "used": v}
+
+
 def latest_run(out):
     runs = sorted(glob.glob(os.path.join(out, "*", "")))
     return runs[-1] if runs else None
@@ -317,7 +506,7 @@ def main():
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--https", action="store_true", help="serve over https (self-signed) so browsers allow 'my location'")
     ap.add_argument("--surveys", default=os.path.expanduser("~/surveys"))
-    ap.add_argument("--camera", default="cm3")
+    ap.add_argument("--camera", default="cm3", help="default camera (the Settings tab can change it)")
     ap.add_argument("--logger-args", default="", help="extra arguments passed to survey_logger.py")
     ap.add_argument("--no-sync", action="store_true", help="don't upload finished runs to Firebase")
     a = ap.parse_args()
@@ -327,7 +516,8 @@ def main():
     drone = Drone(a.mavlink, a.baud) if a.mavlink else None
     if drone:
         drone.start()
-    logger = Logger(["--camera", a.camera, "--out", a.surveys, *a.logger_args.split()])
+    settings = Settings(os.path.join(HERE, "field_settings.json"), a.camera)
+    logger = Logger(lambda: ["--out", a.surveys, *settings.logger_args(), *a.logger_args.split()])
     state = {"plan": None, "uploaded": False, "flying": False}
 
     live_on = logger.running
@@ -390,8 +580,9 @@ def main():
                 pass
         d = dict(drone.s) if drone else {"link": "no drone (plan / bench mode)"}
         d.update(plan=bool(state["plan"]), uploaded=state["uploaded"], logger=logger.running(), live=bool(live_on()),
-                 run=os.path.basename(run.rstrip("/")) if run else None, pieces=pieces["confirmed"],
-                 plan_minutes=state["plan"]["minutes"] if state["plan"] else None)
+                 run=os.path.basename(run.rstrip("/\\")) if run else None, pieces=pieces["confirmed"],
+                 plan_minutes=state["plan"]["minutes"] if state["plan"] else None,
+                 note=settings.current["note"], upload=settings.current["upload"] and firebase_on)
         return d
 
     class H(BaseHTTPRequestHandler):
@@ -422,6 +613,8 @@ def main():
                 return self.send(200, page.encode(), "text/html; charset=utf-8")
             if self.path == "/api/status":
                 return self.send(200, status())
+            if self.path == "/api/settings":
+                return self.send(200, settings.page())
             if self.path == "/live.jpg":
                 if live_on() and os.path.exists(LIVE):
                     return self.send(200, open(LIVE, "rb").read(), "image/jpeg")
@@ -430,10 +623,10 @@ def main():
                 return self.stream()
             if self.path == "/api/runs":
                 runs = [run_info(d) for d in sorted(glob.glob(os.path.join(a.surveys, "*", "")), reverse=True)
-                        if RUN_RE.match(os.path.basename(d.rstrip("/")))]
+                        if RUN_RE.match(os.path.basename(d.rstrip("/\\")))]
                 current = latest_run(a.surveys) if logger.running() else None
                 for r in runs:
-                    r["recording"] = bool(current) and r["run"] == os.path.basename(current.rstrip("/"))
+                    r["recording"] = bool(current) and r["run"] == os.path.basename(current.rstrip("/\\"))
                 return self.send(200, runs)
             m = re.match(r"^/runs/(\d{8}_\d{6})/(pieces|video|replay|crops/([\w.-]+))$", self.path.split("?")[0])
             if m:
@@ -528,10 +721,19 @@ def main():
                 p = self.path
                 if p == "/api/plan":
                     poly = [tuple(map(float, x)) for x in body["polygon"]]
-                    plan = survey_path.make_plan(poly, float(body.get("alt", 4.6)), body.get("camera", a.camera),
+                    plan = survey_path.make_plan(poly, float(body.get("alt", 4.6)), settings.current["camera"],
                                                  float(body.get("overlap", 0.2)), float(body.get("speed", 2.0)), body.get("angle"))
                     state.update(plan=plan, uploaded=False)
                     return self.send(200, {k: plan[k] for k in ("polygon", "waypoints", "swaths", "stats", "minutes")})
+                if p == "/api/settings":
+                    settings.update(body.get("values", {}))
+                    return self.send(200, settings.page())
+                if p == "/api/settings/preset":
+                    settings.preset(body.get("action"), body.get("name"))
+                    return self.send(200, settings.page())
+                m = re.match(r"^/api/runs/(\d{8}_\d{6})/retrack$", p)
+                if m:
+                    return self.send(200, retrack_run(os.path.join(a.surveys, m.group(1)), body))
                 if p == "/api/logger/start":
                     logger.start(sim=body.get("sim"))
                     return self.send(200, status())

@@ -3,9 +3,12 @@
 | File | What it does |
 |---|---|
 | `survey_path.py` | Area (corners) -> lawnmower flight path. Writes a QGroundControl `.plan`, a Mission Planner `.waypoints`, and a preview map. |
-| `survey_logger.py` | On the drone: camera -> YOLO -> drone position -> distinct litter pieces with GPS, crops, optional video (`--record`). `--selftest` checks the map math. |
+| `survey_logger.py` | On the drone: camera -> YOLO -> drone position -> follows each piece frame to frame -> one map entry per piece, with GPS, crops, optional video (`--record`). `--selftest` checks the map math and tracking; `--replay <run>` re-runs tracking on a recorded flight. |
+| `track_sim.py` | Fake survey flights to test piece tracking (old GPS-only merge vs new tracker). See `TODO_tracking.md`. |
+| `track_photo_test.py` | Same comparison with the real YOLO model, flying a virtual camera over labelled UAVVaste photos. |
 | `mission_server.py` | On the drone: web API + operator page. Takes an area, plans, uploads the mission, arms/starts it, runs the logger, stops it after landing. |
-| `operator.html` | The operator page served by `mission_server.py` (draw area, preview, upload, start, pause, return home, live status, found litter). |
+| `operator.html` | The operator page served by `mission_server.py` (draw area, preview, upload, start, pause, return home, live status, found litter, **Settings tab** for every detection/camera/tracking option with presets, and re-running tracking on past flights). |
+| `FIELD_TESTS.md` | Checklist for field tests: what to change in Settings for each test and what to look for. |
 
 ## Bench test (no drone)
     python3 survey_logger.py --selftest
