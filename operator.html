@@ -63,6 +63,7 @@ input:disabled{opacity:.4}
         <label>Overlap <select id="overlap"><option>10</option><option selected>20</option><option>30</option><option>40</option></select> %</label>
         <button id="undo">Undo</button><button id="clear">Clear</button><button id="fit">Fit</button><button id="locate">My location</button>
       </div>
+      <div class="row"><select id="areasel" style="flex:1;min-width:0"></select><button id="areause">Use area</button><button id="areasave">Save area…</button></div>
       <button class="primary" id="plan" style="width:100%">Preview path</button>
       <div class="small" id="stats"></div>
       <div class="row"><button id="upload" style="flex:1">Upload</button><button class="primary" id="start" style="flex:1">Start</button></div>
@@ -154,7 +155,8 @@ const cornerLayer = L.layerGroup().addTo(map), planLayer = L.layerGroup().addTo(
 let droneMarker = null;
 function say(t, err) { $('msg').textContent = t || ''; $('msg').className = 'small ' + (err ? 'bad' : ''); }
 function clearPlan() { plan = null; planLayer.clearLayers(); $('stats').textContent = ''; }
-function home() { return status && status.home_lat != null ? [status.home_lat, status.home_lon] : null; }
+// Where it returns to: the drone's own home once it reports one (set where it arms), else your live position.
+function home() { return status && status.home_lat != null ? [status.home_lat, status.home_lon] : myPos; }
 function drawCorners() {
   cornerLayer.clearLayers();
   if (corners.length >= 2) L.polygon(corners, {color: '#3b3530', weight: 2.5, fillColor: '#ff5c33', fillOpacity: corners.length >= 3 ? .1 : 0}).addTo(cornerLayer);
@@ -202,13 +204,26 @@ async function makePlan() {
 $('plan').onclick = makePlan;
 
 // ---------- my location (browsers only allow it on https or localhost)
-let meMarker = null;
-function showMe(lat, lon, label) {
+let meMarker = null, myPos = null;
+function placeMe(lat, lon, label) {
   if (!meMarker) meMarker = L.circleMarker([lat, lon], {radius: 8, color: '#fff', weight: 3, fillColor: '#2f80ff', fillOpacity: 1}).addTo(map);
   meMarker.setLatLng([lat, lon]).bindTooltip(label);
+}
+function showMe(lat, lon, label) {
+  placeMe(lat, lon, label);
   map.setView([lat, lon], Math.max(map.getZoom(), 18));
 }
+// Live blue dot: follows you as you walk (the map only jumps to you on the first fix, and only if nothing else is on it).
+if (window.isSecureContext && navigator.geolocation) {
+  navigator.geolocation.watchPosition(p => {
+    const first = !myPos;
+    myPos = [p.coords.latitude, p.coords.longitude];
+    placeMe(myPos[0], myPos[1], 'You');
+    if (first && !corners.length && !(status && status.lat != null) && !centred) { map.setView(myPos, 18); centred = true; }
+  }, () => {}, {enableHighAccuracy: true, maximumAge: 2000});
+}
 $('locate').onclick = () => {
+  if (myPos) { showMe(myPos[0], myPos[1], 'You'); return say('Your location.'); }
   if (window.isSecureContext && navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       p => { showMe(p.coords.latitude, p.coords.longitude, 'You'); say(`Your location (±${Math.round(p.coords.accuracy)} m).`); },
@@ -354,6 +369,35 @@ async function openFlight(r) {
 // ---------- settings tab (every option is defined in mission_server.py SETTINGS; this page just draws them)
 let S = null, saveTimer = null;
 const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+
+// Saved areas: built-in ones plus any saved in this browser. "Use area" loads the corners and previews the path.
+const BUILTIN_AREAS = {
+  'Otsiningo · Upper field': [[42.12996, -75.90283], [42.13032, -75.90231], [42.13024, -75.90183], [42.1298, -75.90172], [42.12974, -75.90235]],
+  'Otsiningo · Upper field 2': [[42.12985, -75.9025], [42.13018, -75.9025], [42.13018, -75.90185], [42.12985, -75.90185]],
+  'Otsiningo · Lower field': [[42.12973, -75.90252], [42.12973, -75.90193], [42.1295, -75.90183], [42.1293, -75.90209], [42.12932, -75.90252]],
+  'Otsiningo · Lower field 2': [[42.12926, -75.90314], [42.12926, -75.90261], [42.12901, -75.90261], [42.12902, -75.90287], [42.12902, -75.90314]],
+};
+function myAreas() { try { return JSON.parse(localStorage.getItem('lbAreas') || '{}'); } catch (e) { return {}; } }
+function allAreas() { return {...BUILTIN_AREAS, ...myAreas()}; }
+function fillAreas(pick) {
+  $('areasel').innerHTML = Object.keys(allAreas()).map(n => `<option${n === pick ? ' selected' : ''}>${esc(n)}</option>`).join('');
+}
+$('areause').onclick = () => {
+  const name = $('areasel').value, area = allAreas()[name];
+  if (!area) return;
+  corners = area.map(p => [...p]); clearPlan(); drawCorners();
+  map.fitBounds(corners, {padding: [40, 40]});
+  say('Loaded ' + name);
+  makePlan();
+};
+$('areasave').onclick = () => {
+  if (corners.length < 3) return say('Add at least 3 corners first.', true);
+  const name = (prompt('Name this area') || '').trim();
+  if (!name) return;
+  try { localStorage.setItem('lbAreas', JSON.stringify({...myAreas(), [name]: corners})); } catch (e) { return say("Couldn't save in this browser.", true); }
+  fillAreas(name); say('Saved ' + name);
+};
+fillAreas();
 const num = v => v !== '' && v !== null && typeof v !== 'boolean' && !isNaN(+v);
 const same = (a, b) => num(a) && num(b) ? +a === +b : String(a) === String(b);
 const base = p => String(p).split(/[\\/]/).pop();

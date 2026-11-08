@@ -137,7 +137,8 @@ def sync_run(db, run_dir, source="drone", live=False):
         # same litter seen before (this or an earlier flight)? update it instead of adding a duplicate
         d = 0.00005   # ~5 m of latitude
         near = [s for s in db.collection("litter").where(filter=FieldFilter("lat", ">=", lat - d)).where(filter=FieldFilter("lat", "<=", lat + d)).stream()
-                if s.to_dict().get("status") == "open" and metres(lat, lon, s.get("lat"), s.get("lon")) <= MERGE_M]
+                if s.to_dict().get("status") == "open" and "demoType" not in s.to_dict()   # hand-placed demo pieces
+                and metres(lat, lon, s.get("lat"), s.get("lon")) <= MERGE_M]                 # never absorb real finds
         from datetime import datetime, timezone
         ts_first = datetime.fromtimestamp(first, timezone.utc)
         ts_last = datetime.fromtimestamp(last, timezone.utc)
