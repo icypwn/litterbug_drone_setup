@@ -3,7 +3,8 @@
 
 For each run folder in ~/surveys/:
   - every confirmed piece becomes (or updates) a document in  litter/{id}
-      lat, lon, geohash, status ("open"), confidence, sightings, firstSeen, lastSeen, flights, photo (small JPEG, base64)
+      lat, lon, geohash, status ("open"), confidence, sightings, firstSeen, lastSeen, flights, photo (small JPEG, base64),
+      type / score / points / scoreReason (Gemini looks at the crop first: what it is and how much picking it up helps)
     A piece within MERGE_M of an existing open one (e.g. seen again on a later flight) updates that one instead.
   - the run becomes a document in  flights/{run}  (time, piece count, where the video is kept)
   - the recording is converted to H.264 (video_h264.mp4) so phones can play it; it stays on the Pi
@@ -14,6 +15,7 @@ internet it just fails quietly and the next pass retries.
   python firebase_sync.py --watch         # keep syncing every minute
 """
 import argparse, base64, glob, json, logging, math, os, shutil, sqlite3, subprocess, sys, time
+import classify
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = os.environ.get("LITTERBUG_FIREBASE_KEY", os.path.join(HERE, "firebase", "service-account.json"))
@@ -95,6 +97,20 @@ def convert_one(run_dir, name):
     return False
 
 
+def classify_piece(run_dir, crop):
+    """What the piece is and what it's worth. No crop, no key or a refused request -> plain "litter".
+    No internet raises (URLError), so the whole sync waits and retries, like the Firebase upload would."""
+    if not crop or not os.path.exists(os.path.join(run_dir, crop)):
+        return dict(classify.FALLBACK)
+    try:
+        c = classify.classify_file(os.path.join(run_dir, crop))
+        log.info("%s: %s, score %d (%s)", crop, c["type"], c["score"], c["reason"])
+        return c
+    except RuntimeError as e:
+        log.warning("%s: not classified (%s); uploading as plain litter", crop, e)
+        return dict(classify.FALLBACK)
+
+
 def sync_run(db, run_dir, source="drone", live=False):
     from firebase_admin import firestore
     from google.cloud.firestore_v1.base_query import FieldFilter
@@ -110,7 +126,8 @@ def sync_run(db, run_dir, source="drone", live=False):
         pass
     con = sqlite3.connect(dbp, timeout=10)
     cols = {r[1] for r in con.execute("PRAGMA table_info(pieces)")}
-    for c, decl in (("fb_status", "TEXT DEFAULT 'pending'"), ("fb_id", "TEXT")):   # older runs
+    for c, decl in (("fb_status", "TEXT DEFAULT 'pending'"), ("fb_id", "TEXT"),
+                    ("type", "TEXT"), ("score", "INTEGER"), ("points", "INTEGER")):   # older runs
         if c not in cols:
             con.execute(f"ALTER TABLE pieces ADD COLUMN {c} {decl}")
     rows = con.execute("SELECT id, lat, lon, sightings, max_conf, first_seen, last_seen, crop FROM pieces "
@@ -131,16 +148,24 @@ def sync_run(db, run_dir, source="drone", live=False):
                    "confidence": max(old.get("confidence", 0), conf)}
             if conf > old.get("confidence", 0) and crop:
                 upd["photo"] = small_photo(os.path.join(run_dir, crop))
+            if "type" not in old:                   # put on the map before classification existed
+                c = classify_piece(run_dir, crop)
+                upd.update(type=c["type"], score=c["score"], points=c["points"], scoreReason=c["reason"])
+            else:
+                c = {k: old.get(k) for k in ("type", "score", "points")}
             ref.update(upd)
             fb_status, fb_id = "known", ref.id      # already on the map from an earlier flight
         else:
+            c = classify_piece(run_dir, crop)       # only unique (new) pieces get classified
             db.collection("litter").document(pid).set({
                 "lat": lat, "lon": lon, "geohash": geohash(lat, lon), "status": "open", "source": source,
                 "confidence": round(conf, 3), "sightings": sightings, "firstSeen": ts_first, "lastSeen": ts_last,
                 "flights": [run], "photo": small_photo(os.path.join(run_dir, crop)) if crop else None,
+                "type": c["type"], "score": c["score"], "points": c["points"], "scoreReason": c["reason"],
             })
             fb_status, fb_id = "new", pid
-        con.execute("UPDATE pieces SET uploaded = 1, fb_status = ?, fb_id = ? WHERE id = ?", (fb_status, fb_id, pid))
+        con.execute("UPDATE pieces SET uploaded = 1, fb_status = ?, fb_id = ?, type = ?, score = ?, points = ? WHERE id = ?",
+                    (fb_status, fb_id, c.get("type"), c.get("score"), c.get("points"), pid))
         con.commit()
         sent += 1
     total = con.execute("SELECT COUNT(*) FROM pieces WHERE confirmed = 1").fetchone()[0]
