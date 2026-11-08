@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>LB Operator</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+:root{--bg:#1c4839;--card:#245846;--ink:#3b3530;--litter:#ff5c33;--path:#4d7a94;--good:#8cd973;--caution:#ffc74d;--fg:#fff;--mute:#ffffffb3}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,Segoe UI,sans-serif}
+.app{max-width:1100px;margin:0 auto;padding:12px 14px 80px}
+h1{margin:4px 0 10px;font-size:32px}
+.tabs{position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:center;gap:6px;padding:8px;background:#163a2e;border-top:2px solid var(--ink);z-index:2000}
+.tabs button{flex:0 1 160px}
+.card{background:var(--card);border:2px solid var(--ink);border-radius:22px;padding:12px;box-shadow:0 5px 10px #0003;margin:10px 0}
+.mapbox{height:52vh;min-height:320px;border:2px solid var(--ink);border-radius:28px;overflow:hidden;position:relative}
+#map,#fmap{height:100%}
+.leaflet-container{background:#d8e6c8}
+.leaflet-tile-pane{filter:sepia(.25) hue-rotate(40deg) saturate(.7) brightness(1.05)}
+button,.btn,select{font:inherit;font-weight:600;color:var(--fg);background:#ffffff1f;border:2px solid var(--ink);border-radius:999px;padding:8px 14px;cursor:pointer}
+button.primary{background:var(--litter)}button.danger{background:#d9403a}
+button:disabled{opacity:.4;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0}
+.chip{font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;border:1.5px solid currentColor;background:#ffffff14;white-space:nowrap}
+.ok{color:var(--good)}.warn{color:var(--caution)}.bad{color:var(--litter)}.mute{color:var(--mute)}
+.small{font-size:12px;color:var(--mute)}
+.hint{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);z-index:1000;background:#fff;color:var(--ink);font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;border:1.5px solid var(--ink);white-space:nowrap}
+.badge{width:26px;height:26px;border-radius:50%;background:var(--litter);border:3px solid #fff;outline:2px solid var(--ink);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;box-shadow:1px 2px 2px #0005}
+.video{aspect-ratio:16/9;background:#0006;border:2px solid var(--ink);border-radius:28px;overflow:hidden;display:flex;align-items:center;justify-content:center;position:relative}
+.video img,.video video{width:100%;height:100%;object-fit:contain;display:block}
+.legend span{display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:12px;font-weight:600}
+.legend i{width:14px;height:11px;border:2.5px solid;border-radius:3px}
+.flight{display:flex;align-items:center;gap:12px;cursor:pointer}
+.crops{display:flex;gap:10px;overflow-x:auto}.crops img{width:96px;height:96px;object-fit:cover;border-radius:12px;border:2px solid var(--ink)}
+input[type=number]{width:70px;font:inherit;padding:6px;border-radius:8px;border:2px solid var(--ink);background:#ffffff1f;color:#fff}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- MAP -->
+  <section id="tab-map">
+    <h1>Operator</h1>
+    <div class="row" id="chips"><span class="chip mute">connecting…</span></div>
+    <div class="small" id="tele"></div>
+    <div class="mapbox"><div id="map"></div><div class="hint" id="hint">Click the map to add corners</div></div>
+    <div class="card">
+      <div class="row">
+        <label>Height (ft) <input id="alt" type="number" value="15" min="6" max="100"></label>
+        <label>Speed <select id="speed"><option>1</option><option>1.5</option><option selected>2</option><option>3</option><option>4</option></select> m/s</label>
+        <label>Overlap <select id="overlap"><option>10</option><option selected>20</option><option>30</option><option>40</option></select> %</label>
+        <button id="undo">Undo</button><button id="clear">Clear</button><button id="fit">Fit</button><button id="locate">My location</button>
+      </div>
+      <button class="primary" id="plan" style="width:100%">Preview path</button>
+      <div class="small" id="stats"></div>
+      <div class="row"><button id="upload" style="flex:1">Upload</button><button class="primary" id="start" style="flex:1">Start</button></div>
+      <div class="row"><button id="pause">Pause</button><button id="resume">Resume</button><span style="flex:1"></span><button id="land">Land</button><button class="danger" id="rtl">Home</button></div>
+      <div class="small" id="msg"></div>
+    </div>
+  </section>
+
+  <!-- CAMERA -->
+  <section id="tab-camera" class="hidden">
+    <div class="row"><h1 style="flex:1">Camera</h1><span id="livechip"></span></div>
+    <div class="video" id="videobox"><img id="live" alt=""><div id="nosig" style="position:absolute;font-weight:600">Camera not running</div></div>
+    <div class="legend row"><span><i style="border-color:#ffc800"></i>New</span><span><i style="border-color:#29a1ff"></i>Seen again</span><span><i style="border-color:#3cdb3c"></i>On map</span><span><i style="border-color:#ff3d3d"></i>No GPS</span></div>
+    <div class="card">
+      <div style="font-weight:700" id="dettitle">Detection off</div>
+      <div class="small" id="detline"></div>
+      <div class="row"><button class="primary" id="camtest" style="flex:1">Start camera test</button><button id="fullscreen">Full screen</button></div>
+      <div class="small" id="cammsg"></div>
+    </div>
+  </section>
+
+  <!-- FLIGHTS -->
+  <section id="tab-flights" class="hidden">
+    <div class="row"><h1 style="flex:1">Flights</h1><label class="small"><input type="checkbox" id="showtests"> Tests</label><button id="refresh">Refresh</button></div>
+    <div id="flist"></div>
+    <div id="fdetail" class="hidden">
+      <button id="back">← Back</button>
+      <h2 id="ftitle" style="margin:8px 0 2px"></h2><div class="small" id="fsub"></div>
+      <div class="row" id="fmode"><button id="msmooth" class="primary">Smooth · 30 fps</button><button id="mdet">Detections · 5 fps</button></div>
+      <div class="video" style="margin-top:10px"><video id="fvideo" controls playsinline></video></div>
+      <div class="row"><a class="btn" id="fdownload" download>Download video</a><span class="small" id="fsize"></span></div>
+      <div class="mapbox" style="height:260px;min-height:0"><div id="fmap"></div></div>
+      <div class="card"><b>Litter found</b><div class="crops" id="fcrops"></div></div>
+    </div>
+  </section>
+</div>
+
+<nav class="tabs"><button data-tab="map" class="primary">Map</button><button data-tab="camera">Camera</button><button data-tab="flights">Flights</button></nav>
+
+<script>
+const $ = id => document.getElementById(id);
+const api = async (path, body) => {
+  const r = await fetch(path, body === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+};
+let status = null, reachable = false, tab = 'map';
+const CARTO_KEY = '{{CARTO_KEY}}';   // filled in by mission_server.py from secrets/carto_key.txt
+const tiles = () => L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png' + (CARTO_KEY && !CARTO_KEY.startsWith('{{') ? '?key=' + CARTO_KEY : ''), {maxZoom: 21, maxNativeZoom: 19, subdomains: 'abcd'});
+const badge = (html, bg, size = 26) => L.divIcon({className: '', iconSize: [size, size], html: `<div class="badge" style="background:${bg};width:${size}px;height:${size}px">${html}</div>`});
+
+// ---------- tabs
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('primary', x === b));
+  ['map', 'camera', 'flights'].forEach(t => $('tab-' + t).classList.toggle('hidden', t !== tab));
+  if (tab === 'map') setTimeout(() => map.invalidateSize(), 50);
+  $('live').src = tab === 'camera' ? '/stream?' + Date.now() : '';
+  if (tab === 'flights') loadFlights();
+});
+
+// ---------- map tab
+const map = L.map('map', {zoomControl: true}).setView([40.7402, -73.8410], 18);
+tiles().addTo(map);
+let corners = [], plan = null, centred = false;
+const cornerLayer = L.layerGroup().addTo(map), planLayer = L.layerGroup().addTo(map), pieceLayer = L.layerGroup().addTo(map);
+let droneMarker = null;
+function say(t, err) { $('msg').textContent = t || ''; $('msg').className = 'small ' + (err ? 'bad' : ''); }
+function clearPlan() { plan = null; planLayer.clearLayers(); $('stats').textContent = ''; }
+function home() { return status && status.home_lat != null ? [status.home_lat, status.home_lon] : null; }
+function drawCorners() {
+  cornerLayer.clearLayers();
+  if (corners.length >= 2) L.polygon(corners, {color: '#3b3530', weight: 2.5, fillColor: '#ff5c33', fillOpacity: corners.length >= 3 ? .1 : 0}).addTo(cornerLayer);
+  corners.forEach((c, i) => {
+    const m = L.marker(c, {draggable: true, icon: badge(i + 1, '#ff5c33')}).addTo(cornerLayer);
+    m.on('drag', e => { corners[i] = [e.latlng.lat, e.latlng.lng]; });
+    m.on('dragend', () => { const had = !!plan; clearPlan(); drawCorners(); if (had) makePlan(); });
+    m.on('contextmenu', () => { corners.splice(i, 1); clearPlan(); drawCorners(); });   // right-click / long-press deletes
+  });
+  $('hint').textContent = corners.length < 3 ? `Click the map to add corners (${corners.length} of 3+)` : `${corners.length} corners · drag to move · right-click to delete`;
+}
+map.on('click', e => { corners.push([e.latlng.lat, e.latlng.lng]); clearPlan(); say(''); drawCorners(); });
+$('undo').onclick = () => { corners.pop(); clearPlan(); drawCorners(); };
+$('clear').onclick = () => { corners = []; clearPlan(); drawCorners(); };
+$('fit').onclick = () => {
+  const pts = [...corners, ...(plan ? plan.waypoints : []), ...(home() ? [home()] : [])];
+  if (pts.length >= 2) map.fitBounds(pts, {padding: [40, 40]});
+};
+function arrowAt(a, b) {
+  const p = [a[0] + (b[0] - a[0]) * .55, a[1] + (b[1] - a[1]) * .55];
+  const deg = Math.atan2((b[1] - a[1]) * Math.cos(a[0] * Math.PI / 180), b[0] - a[0]) * 180 / Math.PI;
+  return L.marker(p, {interactive: false, icon: L.divIcon({className: '', iconSize: [20, 20], html: `<div style="transform:rotate(${deg}deg);font-size:18px;color:#3b3530;text-shadow:0 0 3px #fff">▲</div>`})});
+}
+async function makePlan() {
+  if (corners.length < 3) return say('Add at least 3 corners first.', true);
+  try {
+    plan = await api('/api/plan', {polygon: corners, alt: +$('alt').value / 3.281, speed: +$('speed').value, overlap: +$('overlap').value / 100});
+    planLayer.clearLayers();
+    plan.swaths.forEach(s => L.polygon(s, {stroke: false, fillColor: '#ffd94d', fillOpacity: .28, interactive: false}).addTo(planLayer));
+    L.polyline(plan.waypoints, {color: '#4d7a94', weight: 4, interactive: false}).addTo(planLayer);
+    const start = plan.waypoints[0], end = plan.waypoints[plan.waypoints.length - 1];
+    L.marker(start, {icon: badge('⚑', '#8cd973'), interactive: false}).addTo(planLayer);
+    L.marker(end, {icon: badge('🏁', '#3b3530'), interactive: false}).addTo(planLayer);
+    const h = home();
+    if (h) {
+      L.polyline([h, start], {color: '#3b3530', weight: 2.5}).addTo(planLayer); arrowAt(h, start).addTo(planLayer);
+      L.polyline([end, h], {color: '#3b3530', weight: 2.5}).addTo(planLayer); arrowAt(end, h).addTo(planLayer);
+      L.marker(h, {icon: badge('⌂', '#8cd973'), interactive: false}).addTo(planLayer);
+    }
+    $('stats').textContent = ['Passes', 'Flight time', 'Area', 'Pass spacing'].map(k => `${k}: ${plan.stats[k]}`).join(' · ');
+    say('Path ready. Upload it to the drone next.');
+    $('fit').onclick();
+  } catch (e) { say(e.message, true); }
+}
+$('plan').onclick = makePlan;
+
+// ---------- my location (browsers only allow it on https or localhost)
+let meMarker = null;
+function showMe(lat, lon, label) {
+  if (!meMarker) meMarker = L.circleMarker([lat, lon], {radius: 8, color: '#fff', weight: 3, fillColor: '#2f80ff', fillOpacity: 1}).addTo(map);
+  meMarker.setLatLng([lat, lon]).bindTooltip(label);
+  map.setView([lat, lon], Math.max(map.getZoom(), 18));
+}
+$('locate').onclick = () => {
+  if (window.isSecureContext && navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      p => { showMe(p.coords.latitude, p.coords.longitude, 'You'); say(`Your location (±${Math.round(p.coords.accuracy)} m).`); },
+      e => fallbackLocate(e.code === 1 ? 'Location permission denied.' : 'Could not get your location.'),
+      {enableHighAccuracy: true, timeout: 10000});
+  } else fallbackLocate('Your browser only shares location on https or localhost.');
+};
+function fallbackLocate(why) {
+  if (status && status.lat != null) { showMe(status.lat, status.lon, 'Drone'); say(`${why} Showing the drone's position instead.`); }
+  else say(`${why} Open the https address (run the server with --https) or use localhost.`, true);
+}
+async function act(path, body, ok) { try { await api(path, body || {}); say(ok); poll(); } catch (e) { say(e.message, true); } }
+$('upload').onclick = () => act('/api/upload', {}, 'Mission uploaded to the drone.');
+$('start').onclick = () => { if (confirm(`Arm and take off to ${$('alt').value} ft and fly the uploaded path? Keep the controller in hand.`)) act('/api/start', {confirm: true}, 'Mission started: arming and taking off.'); };
+$('pause').onclick = () => act('/api/pause', {}, 'Paused: holding position.');
+$('resume').onclick = () => act('/api/resume', {}, 'Resuming the mission.');
+$('land').onclick = () => act('/api/land', {}, 'Landing here.');
+$('rtl').onclick = () => act('/api/rtl', {}, 'Returning home.');
+
+const chip = (t, c) => `<span class="chip ${c}">${t}</span>`;
+async function poll() {
+  try { status = await api('/api/status'); reachable = true; } catch (e) { reachable = false; }
+  const s = status || {};
+  const connected = reachable && s.link === 'ok';
+  let c = !reachable ? chip('Pi not reachable', 'bad') : chip(connected ? 'Drone connected' : (String(s.link).startsWith('no drone') ? 'Pi online · no drone' : s.link), connected ? 'ok' : 'warn');
+  if (reachable && s.gps_fix != null) c += chip(`GPS ${s.gps_fix >= 3 ? '3D' : 'no fix'} · ${s.sats} sats`, s.gps_fix >= 3 && s.sats >= 8 ? 'ok' : 'warn');
+  if (reachable && s.battery != null) c += chip(`Battery ${s.battery}%`, s.battery > 30 ? 'ok' : s.battery > 15 ? 'warn' : 'bad');
+  if (reachable && s.mode) c += chip(`${s.armed ? 'ARMED' : 'Disarmed'} · ${s.mode}`, s.armed ? 'warn' : 'mute');
+  if (reachable) c += chip(s.logger ? `Detecting · ${s.pieces} found` : 'Detection off', s.logger ? 'ok' : 'mute');
+  $('chips').innerHTML = c;
+  $('tele').textContent = s.lat != null ? `Height ${s.alt ?? '–'} m · ${s.speed ?? '–'} m/s` + (s.mission_count > 1 && s.mission_seq != null ? ` · waypoint ${s.mission_seq} of ${s.mission_count - 1}` : '') + (s.messages && s.messages.length ? ` · ${s.messages[s.messages.length - 1]}` : '') : '';
+  $('plan').disabled = corners.length < 3 || !reachable;
+  $('upload').disabled = !plan || !connected;
+  $('start').disabled = !s.uploaded || !connected;
+  ['pause', 'resume', 'land', 'rtl'].forEach(id => $(id).disabled = !connected);
+  if (s.lat != null) {
+    const ll = [s.lat, s.lon];
+    if (!droneMarker) droneMarker = L.marker(ll, {icon: badge('✈', '#4d7a94', 34), interactive: false}).addTo(map);
+    droneMarker.setLatLng(ll);
+    if (!centred) { map.setView(ll, 19); centred = true; }
+  }
+  // camera tab
+  const det = !!s.logger;
+  $('dettitle').textContent = det ? 'Detecting litter' : 'Detection off';
+  $('detline').textContent = !reachable ? 'Pi not reachable' : s.armed ? `${s.mode || ''} · ${s.pieces} found` : det ? `Camera test · ${s.pieces} found` : 'Starts with the mission. Run a camera test to check it on the ground.';
+  $('camtest').textContent = det ? 'Stop camera test' : 'Start camera test';
+  $('camtest').className = det ? '' : 'primary';
+  $('camtest').disabled = !reachable || !!s.armed;
+}
+async function pollPieces() {
+  try {
+    const g = await api('/api/pieces');
+    pieceLayer.clearLayers();
+    g.features.forEach(f => {
+      const [lon, lat] = f.geometry.coordinates, p = f.properties, known = p.status === 'known';
+      L.marker([lat, lon], {icon: badge('🗑', known ? '#888' : '#ff5c33', 24), opacity: known ? .6 : 1})
+        .bindPopup(`<b>Litter</b> · seen ${p.sightings}× · ${Math.round(p.max_conf * 100)}%${known ? ' · already logged' : ''}<br>${p.crop ? `<img src="/${p.crop}" style="width:150px;border-radius:8px">` : ''}`)
+        .addTo(pieceLayer);
+    });
+  } catch (e) {}
+}
+
+// ---------- camera tab
+let lastFrame = 0, frames = [];
+$('live').onload = () => { lastFrame = Date.now(); frames = [...frames, lastFrame].filter(t => lastFrame - t < 3000); };
+setInterval(() => {
+  const live = Date.now() - lastFrame < 3000;
+  $('nosig').style.display = live ? 'none' : '';
+  $('nosig').textContent = !reachable ? 'Pi not reachable' : (status && status.live) ? 'Waiting for video…' : 'Camera not running';
+  $('live').style.opacity = live ? 1 : .35;
+  $('livechip').innerHTML = live && frames.length > 1 ? chip(`LIVE · ${((frames.length - 1) / ((frames[frames.length - 1] - frames[0]) / 1000)).toFixed(1)} fps`, 'ok') : '';
+}, 500);
+// MJPEG <img> doesn't fire onload per frame in every browser; fall back to polling /live.jpg if needed
+setInterval(() => { if (tab === 'camera' && Date.now() - lastFrame > 4000 && status && status.live) $('live').src = '/stream?' + Date.now(); }, 5000);
+$('camtest').onclick = async () => {
+  const det = status && status.logger;
+  try {
+    if (det) { await api('/api/logger/stop', {}); $('cammsg').textContent = 'Camera test stopped.'; }
+    else {
+      const c = map.getCenter();   // stand-in position for the drone (browser location needs https)
+      await api('/api/logger/start', {sim: `${c.lat.toFixed(6)},${c.lng.toFixed(6)},4.6,0`});
+      $('cammsg').textContent = 'Camera test running: video appears in a few seconds.';
+      $('live').src = '/stream?' + Date.now();
+    }
+    poll();
+  } catch (e) { $('cammsg').textContent = e.message; }
+};
+$('fullscreen').onclick = async () => {
+  const el = $('videobox');
+  try { await el.requestFullscreen(); await screen.orientation.lock('landscape'); } catch (e) {}
+};
+
+// ---------- flights tab
+let runs = [], fmap = null, fLayer = null;
+const fmtDur = s => !s ? '' : s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+async function loadFlights() {
+  $('fdetail').classList.add('hidden'); $('flist').classList.remove('hidden');
+  try { runs = await api('/api/runs'); } catch (e) { $('flist').innerHTML = `<div class="card bad">Can't reach the Pi to load flights.</div>`; return; }
+  const shown = $('showtests').checked ? runs : runs.filter(r => !r.test);
+  $('flist').innerHTML = shown.length ? shown.map(r => `<div class="card flight" data-run="${r.run}">
+      <div class="badge" style="width:38px;height:38px;background:${r.test ? '#4d7a94' : '#ff5c33'}">${r.test ? '🎥' : '✈'}</div>
+      <div style="flex:1"><b>${new Date(r.started * 1000).toLocaleString()}</b> ${r.test ? '<span class="chip mute">Test</span>' : ''} ${r.recording ? '<span class="chip warn">Recording</span>' : ''}
+      <div class="small">${[fmtDur(r.seconds), `${r.pieces} litter found`, !r.video ? 'no video' : r.phone_video ? '' : 'converting video…'].filter(Boolean).join(' · ')}</div></div><span class="mute">›</span></div>`).join('')
+    : `<div class="card"><b>No flights yet</b><div class="small">Each mission is saved on the drone's Pi and shows up here after landing.</div></div>`;
+  document.querySelectorAll('.flight').forEach(el => el.onclick = () => openFlight(runs.find(r => r.run === el.dataset.run)));
+}
+$('showtests').onchange = loadFlights; $('refresh').onclick = loadFlights;
+$('back').onclick = () => { $('fvideo').pause(); loadFlights(); };
+async function openFlight(r) {
+  $('flist').classList.add('hidden'); $('fdetail').classList.remove('hidden');
+  $('ftitle').textContent = new Date(r.started * 1000).toLocaleString();
+  $('fsub').textContent = [r.test ? 'Camera test' : 'Flight', fmtDur(r.seconds), `${r.pieces} litter found`].filter(Boolean).join(' · ');
+  const setMode = smooth => {
+    smooth = smooth && !!r.replay;
+    const src = `/runs/${r.run}/${smooth ? 'replay' : 'video'}`, has = smooth ? r.replay : r.video;
+    const ready = smooth ? r.phone_replay : r.phone_video, bytes = smooth ? r.replay_bytes : r.video_bytes;
+    $('fvideo').src = has ? src : ''; $('fdownload').href = src; $('fdownload').setAttribute('download', `litterbug-${r.run}${smooth ? '-30fps' : ''}.mp4`);
+    $('fdownload').style.display = has ? '' : 'none';
+    $('fsize').textContent = has ? `${(bytes / 1e6).toFixed(1)} MB${ready ? '' : ' · still converting, may not play yet'}` : 'No recording for this run';
+    $('msmooth').className = smooth ? 'primary' : ''; $('mdet').className = smooth ? '' : 'primary';
+  };
+  $('fmode').style.display = r.replay && r.video ? '' : 'none';
+  $('msmooth').onclick = () => setMode(true); $('mdet').onclick = () => setMode(false);
+  setMode(true);
+  if (!fmap) { fmap = L.map('fmap'); tiles().addTo(fmap); fLayer = L.layerGroup().addTo(fmap); }
+  setTimeout(() => fmap.invalidateSize(), 50);
+  const g = await api(`/runs/${r.run}/pieces`).catch(() => ({features: []}));
+  fLayer.clearLayers();
+  const pts = g.features.map(f => [f.geometry.coordinates[1], f.geometry.coordinates[0]]);
+  pts.forEach((p, i) => L.marker(p, {icon: badge('🗑', '#ff5c33', 24)}).addTo(fLayer));
+  if (pts.length) fmap.fitBounds(pts, {padding: [30, 30], maxZoom: 19}); else fmap.setView([40.7402, -73.8410], 16);
+  $('fcrops').innerHTML = g.features.map(f => f.properties.crop ? `<div><img src="/runs/${r.run}/${f.properties.crop}"><div class="small">${Math.round(f.properties.max_conf * 100)}% · seen ${f.properties.sightings}×</div></div>` : '').join('') || '<span class="small">None</span>';
+}
+
+drawCorners(); poll(); pollPieces();
+setInterval(poll, 1000); setInterval(pollPieces, 2000);
+</script>
+</body>
+</html>

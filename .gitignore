@@ -1,0 +1,13 @@
+# secrets: share privately, never commit
+# (secrets/carto_key.txt and firebase/service-account.json ARE committed: private repo, owner's choice)
+secrets/https_*.pem
+operator-ios/Operator/Sources/Secrets.swift
+# generated / local
+operator-ios/build/
+operator-ios/*.xcodeproj/xcuserdata/
+operator-ios/*.xcodeproj/project.xcworkspace/xcuserdata/
+__pycache__/
+*.log
+logger_console.txt
+live.jpg
+.DS_Store

@@ -1,0 +1,80 @@
+LITTERBUG HANDOFF  (written 2026-11-07)
+=======================================
+
+GOAL
+Drone (3DR Solo, ArduCopter/OpenSolo) flies a lawnmower survey at ~15 ft. A Raspberry Pi 5 on the drone
+runs YOLO to find litter, geotags each piece, records video, and after landing uploads NEW pieces to
+Firebase so a consumer iOS app (user's "Litterbug" app) can show them for people to pick up.
+An operator iOS app ("LB Operator") plans/flies missions and shows live camera + litter.
+
+USER PREFERENCES (important)
+- Very concise answers; plain words, no jargon. Answer questions without starting edits ("questions are not requests").
+- Confirm before big/irreversible actions. Don't retrain/rerun things they didn't ask for.
+- Rejected tool calls have sometimes still executed: verify file state after a rejection.
+- Show iOS UI changes on the iPhone 16 Pro simulator (id 64F3811F-4F22-41E3-A2B1-34A7AF0BFBA4) with screenshots.
+
+HARDWARE / NETWORK
+- Pi: hostname litterbug, user litterbug, SSH key ~/.ssh/id_ed25519. Camera: regular (non-wide) Camera Module 3
+  now mounted (user confirmed 2026-11-07). Scripts default to --camera cm3, so no flag needed.
+  Still to confirm: image top points toward the drone's nose (else set --mount-yaw).
+- Pi reports UNDER-VOLTAGE (throttled=0x50000) and has crashed/frozen 3x under load. Needs official 27W 5V/5A PSU.
+- Pi currently OFFLINE. Last joined the user's iPhone hotspot (172.20.10.2) because the hotspot was renamed to
+  the home Wi-Fi name/password (Verizon_GL7WKC). litterbug.local mDNS is flaky on the hotspot; try the IP.
+- Field plan: Pi + phone on the phone's hotspot (gives internet) or Solo's SoloLink Wi-Fi (no internet).
+  Pi talks to flight controller over serial MAVLink (not yet wired/tested).
+
+MODELS  (~/litter-model/)
+- BEST: full1280_all/best.pt = ground (TACO+CLICK) + drone (UAVVaste) at imgsz 1280 whole frame.
+  89% of litter found on 116 UAVVaste test photos, 104 false. On Pi as ~/yolo/all1280_rect_ncnn_model
+  (NCNN exported at imgsz 736,1280 rectangular) = 4.96 fps on Pi CPU.
+- Others: litter/ (ground only), v2/, v3/ (ground+drone tiles, 91%, 1.6 fps), runs/uavonly, full1280_uav.
+- UAVVaste gotcha: GoPro photos have EXIF rotate tags; labels are on RAW pixels -> never exif_transpose,
+  and pass numpy arrays (not PIL) to Ultralytics.
+
+CODE  (~/litterbug/, copy to Pi ~/litterbug/, run with ~/yolo/venv)
+- survey_logger.py   camera(30fps, lores 640x360 live stream) -> YOLO on newest full frame -> pose (MAVLink or --sim)
+                     -> geolocate -> merge sightings within 3 m -> SQLite survey.db (WAL; fb_status/fb_id columns),
+                     crops, frames, video.mp4 (--record), live JPEG (--live). --selftest checks map math.
+- mission_server.py  HTTP API :8080 + operator.html. Plan (/api/plan), upload/start/pause/rtl/land via pymavlink,
+                     runs logger, stops it on disarm, /stream (MJPEG live), /api/pieces (from DB, with status),
+                     /api/runs + /runs/<run>/{pieces,video(range requests),crops/*}, converts videos to H.264,
+                     after landing calls firebase_sync (upload only NEW pieces). Mid-flight Firebase checks were
+                     REMOVED at user's request (check+upload after landing only).
+- firebase_sync.py   dedupe vs Firestore (open item within 3 m -> "known", else "new"); skips --sim runs.
+- survey_path.py     polygon -> lawnmower path, QGC .plan / Mission Planner .waypoints / preview.
+- Pi venv has ultralytics, ncnn, pymavlink, firebase-admin installed. Scripts were copied to Pi BEFORE the
+  latest changes -> RE-COPY all ~/litterbug/*.py + operator.html when Pi is back.
+
+FIREBASE  project litterbug-38a1f (owner ethharb24@gmail.com; firebase CLI logged in as that account;
+          gcloud: pass --account=ethharb24@gmail.com, default gcloud account is different)
+- Firestore (nam5) created. Rules (~/litterbug/firebase/firestore.rules, deployed): litter + flights public read, no client writes.
+- Service account key: ~/litterbug/firebase/service-account.json (also copied to Pi). Keep out of git.
+- Spark plan: no Storage -> videos stay on Pi. Blaze needed for video upload (user hasn't decided).
+- litter docs: lat, lon, geohash, status "open", confidence, sightings, firstSeen, lastSeen, flights[], photo (base64 jpg).
+
+OPERATOR APP  ~/litterbug/operator-ios  (XcodeGen: project.yml -> `xcodegen generate`; bundle icy.LitterbugOperator)
+- SwiftUI + Mapbox (token in Operator/Sources/Secrets.swift, gitignored; logo/attribution hidden via @_spi(Restricted)).
+- Tabs: Map (draw/drag corners, preview path, upload/start/pause/home, live drone + litter; repeats grey after landing),
+  Camera (30fps live MJPEG, legend, camera test, full-screen landscape), Flights (past runs, video player, Save to Photos).
+- Aesthetic copied from user's app (dark green, ink outlines, orange badges).
+- Debug launch args: -demoArea -cameraTab -flightsTab -openFirstFlight -fullCamera. Default Pi host litterbug.local:8080
+  (simulator currently set to localhost:8080 via defaults for testing against a Mac copy of mission_server).
+
+USER'S CONSUMER APP  ~/Downloads/XCode Projects/Litterbug (Mapbox, doodle style, sample pins). NOT modified.
+Next step there (offered, not done): add Firebase iOS SDK, read Firestore `litter` instead of LitterPin.samples.
+
+TODO / OPEN
+1. Get Pi online (proper PSU!), re-copy scripts, run camera bench test:
+   python survey_logger.py --sim LAT,LON,4.6,0 --camera cm3wide --record --live /dev/shm/litterbug_live.jpg --seconds 30
+   Measure YOLO fps with 30fps camera (expected ~4.5-4.8) and live view fps; check lores YUV420 stream works on Pi 5.
+2. Run mission_server on Pi; test app against it (Camera test, Flights).
+3. Test MAVLink mission flow against ArduPilot SITL before any real flight; wire Pi<->Solo serial.
+4. Pending user decisions: per-item tracking vs 3 m merge (user wants separate items; also wanted label+item per
+   location, label maybe via vision AI after landing); Blaze for video storage; regular CM3 camera; consumer app Firebase.
+5. Mac disk was low (~6 GB free; CoreSimulator uses 20 GB). Scratch files live in the session scratchpad (temporary).
+
+WEB OPERATOR (for non-Mac users)
+- operator.html is now a full web version of LB Operator (Map / Camera / Flights tabs, same look; Leaflet map).
+  Served by mission_server.py at http://<pi>:8080 (or run mission_server.py on any laptop for planning-only tests:
+  `python mission_server.py --no-sync` then open http://localhost:8080). Works in Chrome/Edge on Windows.
+- Limits: needs internet for map tiles; "my location" not available over http.

@@ -1,0 +1,18 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Litter found by the drone: anyone can see it (consumer map); only the drone's service account writes.
+    match /litter/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+    // Flight records: readable (operator app); written only by the drone.
+    match /flights/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

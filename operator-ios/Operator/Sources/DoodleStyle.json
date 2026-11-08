@@ -1,0 +1,183 @@
+{
+  "version": 8,
+  "name": "Litterbug Doodle",
+  "sources": {
+    "streets": {
+      "type": "vector",
+      "url": "mapbox://mapbox.mapbox-streets-v8"
+    }
+  },
+  "layers": [
+    {
+      "id": "paper",
+      "type": "background",
+      "paint": {
+        "background-color": "#F6F0E1"
+      }
+    },
+    {
+      "id": "green-fill",
+      "type": "fill",
+      "source": "streets",
+      "source-layer": "landuse",
+      "filter": [
+        "match",
+        [
+          "get",
+          "class"
+        ],
+        [
+          "park",
+          "grass",
+          "pitch",
+          "playground",
+          "wood",
+          "scrub",
+          "cemetery",
+          "golf_course",
+          "agriculture"
+        ],
+        true,
+        false
+      ],
+      "paint": {
+        "fill-color": "#D3E4B8"
+      }
+    },
+    {
+      "id": "water-fill",
+      "type": "fill",
+      "source": "streets",
+      "source-layer": "water",
+      "paint": {
+        "fill-color": "#C4DFEA"
+      }
+    },
+    {
+      "id": "waterway",
+      "type": "line",
+      "source": "streets",
+      "source-layer": "waterway",
+      "paint": {
+        "line-color": "#6FA3BC",
+        "line-width": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          12,
+          1,
+          18,
+          4
+        ]
+      }
+    },
+    {
+      "id": "minor-paper",
+      "type": "line",
+      "source": "streets",
+      "source-layer": "road",
+      "filter": [
+        "all",
+        [
+          "==",
+          [
+            "geometry-type"
+          ],
+          "LineString"
+        ],
+        [
+          "match",
+          [
+            "get",
+            "class"
+          ],
+          [
+            "street",
+            "street_limited",
+            "service"
+          ],
+          true,
+          false
+        ]
+      ],
+      "layout": {
+        "line-cap": "round",
+        "line-join": "round"
+      },
+      "paint": {
+        "line-color": "#FFFBF2",
+        "line-width": [
+          "interpolate",
+          [
+            "exponential",
+            1.5
+          ],
+          [
+            "zoom"
+          ],
+          13,
+          1,
+          18,
+          12
+        ]
+      }
+    },
+    {
+      "id": "major-paper",
+      "type": "line",
+      "source": "streets",
+      "source-layer": "road",
+      "filter": [
+        "all",
+        [
+          "==",
+          [
+            "geometry-type"
+          ],
+          "LineString"
+        ],
+        [
+          "match",
+          [
+            "get",
+            "class"
+          ],
+          [
+            "motorway",
+            "trunk",
+            "primary",
+            "secondary",
+            "tertiary"
+          ],
+          true,
+          false
+        ]
+      ],
+      "layout": {
+        "line-cap": "round",
+        "line-join": "round"
+      },
+      "paint": {
+        "line-color": "#FFFBF2",
+        "line-width": [
+          "interpolate",
+          [
+            "exponential",
+            1.5
+          ],
+          [
+            "zoom"
+          ],
+          12,
+          2,
+          18,
+          22
+        ]
+      }
+    }
+  ]
+}
