@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Ask Gemini what a piece of litter is and how much picking it up helps the environment.
+"""Ask Gemini what a piece of litter is; its points come from a fixed table per category.
 
 Used by firebase_sync.py on each NEW piece (after landing, before it goes on the map):
     type   one of the consumer app's categories (bottle, can, bag, wrapper, cup, litter)
-    score  1-10, how much good removing it does (harm to wildlife and water, how long it lasts, hazard)
-    points what the app awards for picking it up (score x POINTS_PER_SCORE)
+    points what the app awards for picking it up (POINTS[type]; same table as LitterType.points in the app)
 
 The consumer app uses the same model and categories to check a pickup photo (see VERIFY in the app).
 
@@ -17,8 +16,9 @@ import base64, json, logging, os, sys, time, urllib.error, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODEL = os.environ.get("LITTERBUG_GEMINI_MODEL", "gemini-3.7-flash")
 TYPES = ["bottle", "can", "bag", "wrapper", "cup", "litter"]   # same list as LitterType.all in the app
-POINTS_PER_SCORE = 10
-FALLBACK = {"type": "litter", "score": 3, "points": 3 * POINTS_PER_SCORE, "reason": "not classified"}
+# Fixed points per category, by how much good removing it does (keep in sync with LitterType.points in the app).
+POINTS = {"bag": 80, "bottle": 80, "can": 60, "cup": 60, "wrapper": 50, "litter": 30}
+FALLBACK = {"type": "litter", "points": POINTS["litter"], "reason": "not classified"}
 log = logging.getLogger("classify")
 
 PROMPT = """This is a photo of one piece of litter, taken from a drone about 15 feet up (it may be small or blurry).
@@ -30,20 +30,16 @@ PROMPT = """This is a photo of one piece of litter, taken from a drone about 15 
    wrapper - snack, candy or food wrapper, chip packet
    cup     - disposable cup, coffee cup, cup lid
    litter  - anything else, or you can't tell
-2. score: 1-10, how much good it does the environment to pick this up. Weigh: harm to wildlife (entanglement,
-   being eaten), whether it breaks into microplastics or leaches, how long it would last outdoors, and hazards
-   (broken glass, sharp metal). E.g. a plastic bag or bottle scores high; a paper napkin scores low.
-3. reason: at most 8 words explaining the score.
+2. reason: at most 8 words on what you see.
 """
 
 SCHEMA = {
     "type": "object",
     "properties": {
         "type": {"type": "string", "enum": TYPES},
-        "score": {"type": "integer", "minimum": 1, "maximum": 10},
         "reason": {"type": "string"},
     },
-    "required": ["type", "score", "reason"],
+    "required": ["type", "reason"],
 }
 
 
@@ -58,7 +54,7 @@ def api_key():
 
 
 def classify_jpeg(jpeg_bytes, key=None, retries=3):
-    """-> {"type", "score", "points", "reason"}. Raises if Gemini can't be reached (caller retries later)."""
+    """-> {"type", "points", "reason"}. Raises if Gemini can't be reached (caller retries later)."""
     key = key or api_key()
     if not key:
         raise RuntimeError("no Gemini key (set GEMINI_API_KEY or secrets/gemini_key.txt)")
@@ -79,8 +75,7 @@ def classify_jpeg(jpeg_bytes, key=None, retries=3):
             parts = ((reply.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
             out = json.loads("".join(p.get("text", "") for p in parts))
             t = out.get("type") if out.get("type") in TYPES else "litter"
-            score = min(10, max(1, int(out.get("score", FALLBACK["score"]))))
-            return {"type": t, "score": score, "points": score * POINTS_PER_SCORE, "reason": str(out.get("reason", ""))[:80]}
+            return {"type": t, "points": POINTS[t], "reason": str(out.get("reason", ""))[:80]}
         except urllib.error.HTTPError as e:
             if e.code in (429, 500, 502, 503) and attempt < retries - 1:
                 time.sleep(2 ** attempt + 0.5)

@@ -4,7 +4,7 @@
 For each run folder in ~/surveys/:
   - every confirmed piece becomes (or updates) a document in  litter/{id}
       lat, lon, geohash, status ("open"), confidence, sightings, firstSeen, lastSeen, flights, photo (small JPEG, base64),
-      type / score / points / scoreReason (Gemini looks at the crop first: what it is and how much picking it up helps)
+      type / points (Gemini looks at the crop first to say what it is; points are fixed per type, see classify.POINTS)
     A piece within MERGE_M of an existing open one (e.g. seen again on a later flight) updates that one instead.
   - the run becomes a document in  flights/{run}  (time, piece count, where the video is kept)
   - the recording is converted to H.264 (video_h264.mp4) so phones can play it; it stays on the Pi
@@ -104,7 +104,7 @@ def classify_piece(run_dir, crop):
         return dict(classify.FALLBACK)
     try:
         c = classify.classify_file(os.path.join(run_dir, crop))
-        log.info("%s: %s, score %d (%s)", crop, c["type"], c["score"], c["reason"])
+        log.info("%s: %s, %d pts (%s)", crop, c["type"], c["points"], c["reason"])
         return c
     except RuntimeError as e:
         log.warning("%s: not classified (%s); uploading as plain litter", crop, e)
@@ -127,7 +127,7 @@ def sync_run(db, run_dir, source="drone", live=False):
     con = sqlite3.connect(dbp, timeout=10)
     cols = {r[1] for r in con.execute("PRAGMA table_info(pieces)")}
     for c, decl in (("fb_status", "TEXT DEFAULT 'pending'"), ("fb_id", "TEXT"),
-                    ("type", "TEXT"), ("score", "INTEGER"), ("points", "INTEGER")):   # older runs
+                    ("type", "TEXT"), ("points", "INTEGER")):   # older runs
         if c not in cols:
             con.execute(f"ALTER TABLE pieces ADD COLUMN {c} {decl}")
     rows = con.execute("SELECT id, lat, lon, sightings, max_conf, first_seen, last_seen, crop FROM pieces "
@@ -150,9 +150,9 @@ def sync_run(db, run_dir, source="drone", live=False):
                 upd["photo"] = small_photo(os.path.join(run_dir, crop))
             if "type" not in old:                   # put on the map before classification existed
                 c = classify_piece(run_dir, crop)
-                upd.update(type=c["type"], score=c["score"], points=c["points"], scoreReason=c["reason"])
+                upd.update(type=c["type"], points=c["points"])
             else:
-                c = {k: old.get(k) for k in ("type", "score", "points")}
+                c = {k: old.get(k) for k in ("type", "points")}
             ref.update(upd)
             fb_status, fb_id = "known", ref.id      # already on the map from an earlier flight
         else:
@@ -161,11 +161,11 @@ def sync_run(db, run_dir, source="drone", live=False):
                 "lat": lat, "lon": lon, "geohash": geohash(lat, lon), "status": "open", "source": source,
                 "confidence": round(conf, 3), "sightings": sightings, "firstSeen": ts_first, "lastSeen": ts_last,
                 "flights": [run], "photo": small_photo(os.path.join(run_dir, crop)) if crop else None,
-                "type": c["type"], "score": c["score"], "points": c["points"], "scoreReason": c["reason"],
+                "type": c["type"], "points": c["points"],
             })
             fb_status, fb_id = "new", pid
-        con.execute("UPDATE pieces SET uploaded = 1, fb_status = ?, fb_id = ?, type = ?, score = ?, points = ? WHERE id = ?",
-                    (fb_status, fb_id, c.get("type"), c.get("score"), c.get("points"), pid))
+        con.execute("UPDATE pieces SET uploaded = 1, fb_status = ?, fb_id = ?, type = ?, points = ? WHERE id = ?",
+                    (fb_status, fb_id, c.get("type"), c.get("points"), pid))
         con.commit()
         sent += 1
     total = con.execute("SELECT COUNT(*) FROM pieces WHERE confirmed = 1").fetchone()[0]

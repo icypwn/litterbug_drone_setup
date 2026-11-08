@@ -12,3 +12,4 @@ logger_console.txt
 live.jpg
 .DS_Store
 field_settings.json
+secrets/gemini_key.txt
