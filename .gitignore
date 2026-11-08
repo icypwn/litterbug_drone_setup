@@ -1,6 +1,10 @@
 # secrets: share privately, never commit
-# (secrets/carto_key.txt and firebase/service-account.json ARE committed: private repo, owner's choice)
-secrets/https_*.pem
+secrets/
+firebase/service-account.json
+*.pem
+.pylib/
+arming_check_before.txt
+check/
 operator-ios/Operator/Sources/Secrets.swift
 # generated / local
 operator-ios/build/
